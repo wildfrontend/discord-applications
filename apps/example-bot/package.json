@@ -1,0 +1,20 @@
+{
+  "name": "@dc/example-bot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "deploy-commands": "tsx --env-file-if-exists=.env src/deploy-commands.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
+  },
+  "dependencies": {
+    "@dc/core": "workspace:*",
+    "discord.js": "^14.27.0"
+  }
+}
