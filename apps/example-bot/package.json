@@ -3,11 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "deploy-commands": "tsx --env-file-if-exists=.env src/deploy-commands.ts",
+    "deploy-commands:prod": "node --env-file-if-exists=.env dist/deploy-commands.js",
+    "invite": "tsx --env-file-if-exists=.env src/invite.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
