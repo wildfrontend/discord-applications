@@ -11,15 +11,47 @@ packages/             # 共用套件
   core/               # @dc/core：client 建立、slash command 分派與註冊、env 工具
 ```
 
-## 開始
+## 1. 在 Discord 建立 application
+
+1. 到 [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**。
+2. **General Information** 頁複製 **Application ID** → 填到 `DISCORD_CLIENT_ID`。
+3. **Bot** 頁按 **Reset Token** 複製 token → 填到 `DISCORD_TOKEN`（token 等同密碼，不要 commit）。
+4. 開發時建議填 `DISCORD_GUILD_ID`（Discord 開啟開發者模式後，對伺服器按右鍵 → 複製伺服器 ID），指令會立即生效；全域指令可能要等一段時間才出現。
 
 ```bash
 pnpm install
-cp apps/example-bot/.env.example apps/example-bot/.env   # 填入 token / client id
+cp apps/example-bot/.env.example apps/example-bot/.env   # 填入上面的值
+```
 
+## 2. 邀請 bot 進伺服器
+
+```bash
+pnpm --filter @dc/example-bot invite   # 印出邀請連結，用瀏覽器開啟並選擇伺服器
+```
+
+## 3. 本機執行
+
+```bash
 pnpm --filter @dc/example-bot deploy-commands   # 註冊 slash commands
 pnpm --filter @dc/example-bot dev               # 開發模式（watch）
 ```
+
+在伺服器輸入 `/ping`，bot 回覆 `Pong!` 就成功了。
+
+## 4. 部署（24 小時上線）
+
+Bot 要持續執行才會回應，正式上線需要放到主機上。根目錄的 `Dockerfile` 可部署到任何支援 Docker 的平台（Railway、Fly.io、Render、VPS 等）：
+
+```bash
+docker build --build-arg APP=example-bot -t dc-example-bot .
+docker run -d --restart unless-stopped \
+  -e DISCORD_TOKEN=... -e DISCORD_CLIENT_ID=... \
+  dc-example-bot
+```
+
+- 容器啟動時會先同步 slash commands，再啟動 bot。
+- 正式環境**不要**設 `DISCORD_GUILD_ID`，指令才會註冊為全域、在所有伺服器可用。
+- 在雲端平台上，環境變數請用平台的 secrets / variables 設定。
 
 ## 常用指令
 
