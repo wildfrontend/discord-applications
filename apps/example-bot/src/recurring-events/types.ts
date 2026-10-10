@@ -3,7 +3,7 @@ import type {
   GuildScheduledEventPrivacyLevel,
 } from 'discord.js'
 
-export type RecurrenceUnit = 'days' | 'weeks'
+export type RecurrenceUnit = 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks'
 
 export interface RecurringEventSchedule {
   id: string

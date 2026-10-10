@@ -9,6 +9,26 @@ import {
 } from 'discord.js'
 import type { SlashCommand } from './command.js'
 
+const unavailableInteractionCodes = new Set([10062, 40060])
+
+function discordErrorCode(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return
+  return typeof error.code === 'number' ? error.code : undefined
+}
+
+function isUnavailableInteraction(error: unknown): boolean {
+  const code = discordErrorCode(error)
+  return code !== undefined && unavailableInteractionCodes.has(code)
+}
+
+function logSafeError(prefix: string, error: unknown): void {
+  // Error objects from @discordjs/rest contain callback URLs with short-lived
+  // interaction tokens. Logging only the stack avoids leaking those URLs.
+  const details =
+    error instanceof Error ? error.stack || error.message : String(error)
+  console.error(`${prefix}\n${details}`)
+}
+
 export interface CreateBotOptions {
   token: string
   commands: SlashCommand[]
@@ -27,7 +47,7 @@ export function createBot({
   const commandMap = new Map(commands.map((c) => [c.data.name, c]))
 
   client.once(Events.ClientReady, (c) => {
-    console.log(`[bot] Logged in as ${c.user.tag}`)
+    console.log(`[bot] Logged in as ${c.user.tag} pid=${process.pid}`)
   })
 
   client.on(Events.InteractionCreate, async (interaction) => {
@@ -38,7 +58,13 @@ export function createBot({
       try {
         await command.autocomplete(interaction)
       } catch (error) {
-        console.error(
+        if (isUnavailableInteraction(error)) {
+          console.warn(
+            `[bot] Ignored unavailable autocomplete /${interaction.commandName} code=${discordErrorCode(error)}`,
+          )
+          return
+        }
+        logSafeError(
           `[bot] Autocomplete /${interaction.commandName} failed:`,
           error,
         )
@@ -46,10 +72,12 @@ export function createBot({
           try {
             await interaction.respond([])
           } catch (responseError) {
-            console.error(
-              '[bot] Failed to close autocomplete interaction:',
-              responseError,
-            )
+            if (!isUnavailableInteraction(responseError)) {
+              logSafeError(
+                '[bot] Failed to close autocomplete interaction:',
+                responseError,
+              )
+            }
           }
         }
       }
@@ -64,7 +92,13 @@ export function createBot({
     try {
       await command.execute(interaction)
     } catch (error) {
-      console.error(`[bot] Command /${interaction.commandName} failed:`, error)
+      if (isUnavailableInteraction(error)) {
+        console.warn(
+          `[bot] Ignored unavailable command /${interaction.commandName} code=${discordErrorCode(error)}`,
+        )
+        return
+      }
+      logSafeError(`[bot] Command /${interaction.commandName} failed:`, error)
       const reply = {
         content: '執行指令時發生錯誤。',
         flags: MessageFlags.Ephemeral,
@@ -78,10 +112,12 @@ export function createBot({
           await interaction.reply(reply)
         }
       } catch (responseError) {
-        console.error(
-          '[bot] Failed to send command error response:',
-          responseError,
-        )
+        if (!isUnavailableInteraction(responseError)) {
+          logSafeError(
+            '[bot] Failed to send command error response:',
+            responseError,
+          )
+        }
       }
     }
   })

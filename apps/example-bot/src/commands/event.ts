@@ -11,6 +11,9 @@ import { recurringEventStore } from '../recurring-events/store.js'
 import type { RecurrenceUnit } from '../recurring-events/types.js'
 
 const unitLabels: Record<RecurrenceUnit, string> = {
+  seconds: '秒',
+  minutes: '分鐘',
+  hours: '小時',
   days: '天',
   weeks: '週',
 }
@@ -57,6 +60,9 @@ export default defineCommand({
             .setDescription('重複單位')
             .setRequired(true)
             .addChoices(
+              { name: '秒（測試用，最少 10 秒）', value: 'seconds' },
+              { name: '分鐘', value: 'minutes' },
+              { name: '小時', value: 'hours' },
               { name: '天', value: 'days' },
               { name: '週', value: 'weeks' },
             ),
@@ -86,8 +92,12 @@ export default defineCommand({
     const query = String(focused.value).toLocaleLowerCase()
 
     if (focused.name === 'activity') {
-      const guild = await interaction.client.guilds.fetch(interaction.guildId)
-      const events = await guild.scheduledEvents.fetch()
+      const guild = interaction.client.guilds.cache.get(interaction.guildId)
+      if (!guild) {
+        await interaction.respond([])
+        return
+      }
+      const events = guild.scheduledEvents.cache
       const canManageAll = interaction.memberPermissions?.has(
         PermissionFlagsBits.ManageEvents,
       )
@@ -163,7 +173,43 @@ export default defineCommand({
       const eventId = interaction.options.getString('activity', true)
       const interval = interaction.options.getInteger('every', true)
       const unit = interaction.options.getString('unit', true) as RecurrenceUnit
-      const event = await interaction.guild.scheduledEvents.fetch(eventId)
+
+      if (unit === 'seconds' && interval < 10) {
+        await interaction.editReply(
+          '秒級排程最少為 10 秒，避免觸發 Discord API 限制。',
+        )
+        return
+      }
+      if (unit === 'seconds' && process.env.NODE_ENV === 'production') {
+        await interaction.editReply(
+          '秒級排程僅供本機開發測試，正式環境請使用分鐘以上。',
+        )
+        return
+      }
+
+      const events = await interaction.guild.scheduledEvents.fetch()
+      const exactNameMatches = events.filter(
+        (candidate) =>
+          candidate.name.toLocaleLowerCase() === eventId.toLocaleLowerCase(),
+      )
+
+      if (!/^\d{17,20}$/.test(eventId) && exactNameMatches.size > 1) {
+        await interaction.editReply(
+          '有多個同名活動。請重新執行指令，並從 activity 選單選擇正確的活動。',
+        )
+        return
+      }
+
+      const event = /^\d{17,20}$/.test(eventId)
+        ? events.get(eventId)
+        : exactNameMatches.first()
+
+      if (!event) {
+        await interaction.editReply(
+          '找不到這個活動。請重新執行指令，並從 activity 選單選擇活動。',
+        )
+        return
+      }
 
       const canManageAll = interaction.memberPermissions?.has(
         PermissionFlagsBits.ManageEvents,
@@ -193,8 +239,10 @@ export default defineCommand({
         unit,
       )
       const nextTimestamp = Math.floor(Date.parse(schedule.nextStartAt) / 1000)
+      const testReminder =
+        unit === 'seconds' ? ' 測試完成後請用 `/event remove` 停止排程。' : ''
       await interaction.editReply(
-        `已替「${event.name}」設定每 ${interval} ${unitLabels[unit]}重複。下一場活動已建立；再下一場的時間是 <t:${nextTimestamp}:F>。`,
+        `已替「${event.name}」設定每 ${interval} ${unitLabels[unit]}重複。下一場活動已建立；再下一場的時間是 <t:${nextTimestamp}:F>。${testReminder}`,
       )
       return
     }

@@ -44,7 +44,7 @@ pnpm --filter @dc/example-bot dev               # 開發模式（watch）
 
 1. 輸入 `/event repeat`。
 2. 在 `activity` 選擇既有的單次活動。
-3. 使用 `every` 與 `unit` 設定「每 N 天」或「每 N 週」。
+3. 使用 `every` 與 `unit` 設定「每 N 秒／分鐘／小時／天／週」；秒級排程最少 10 秒，僅建議用於測試。
 4. bot 會立即建立下一場，並在執行期間持續維持一場未來活動。
 
 活動時間沿用 Discord 的時間戳記，會依每位使用者的本地時區顯示。
@@ -54,7 +54,7 @@ pnpm --filter @dc/example-bot dev               # 開發模式（watch）
 - `/event list`：列出自訂重複排程。
 - `/event remove`：停止排程，不刪除已建立的 Discord 活動。
 
-第一版支援「其他地方」與一般語音頻道活動；Stage 活動需要更多頻道管理權限，暫不處理。bot 需要「建立活動」權限，一般成員只能管理自己建立的活動，具有「管理活動」權限者可以管理全部排程。排程預設保存在 `apps/example-bot/data/`；部署 Docker 時請將持久化磁碟掛載到 `/app/data`，也可以用 `BOT_DATA_DIR` 指定其他位置。
+第一版支援「其他地方」與一般語音頻道活動；Stage 活動需要更多頻道管理權限，暫不處理。bot 需要「建立活動」權限，一般成員只能管理自己建立的活動，具有「管理活動」權限者可以管理全部排程。排程使用 SQLite，預設保存在 `apps/example-bot/data/`；舊版 JSON 資料會在啟動時自動遷移。部署 Docker 時請將持久化磁碟掛載到 `/app/data`，也可以用 `BOT_DATA_DIR` 指定其他位置。
 
 ## 4. 部署（24 小時上線）
 
@@ -70,6 +70,7 @@ docker run -d --restart unless-stopped \
 - 容器啟動時會先同步 slash commands，再啟動 bot。
 - 正式環境**不要**設 `DISCORD_GUILD_ID`，指令才會註冊為全域、在所有伺服器可用。
 - 在雲端平台上，環境變數請用平台的 secrets / variables 設定。
+- Gateway bot 請維持單一 replica；若需要水平擴充，必須先導入 Discord sharding 與分散式排程鎖。
 
 ## 常用指令
 
