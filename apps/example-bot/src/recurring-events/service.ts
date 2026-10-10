@@ -10,8 +10,14 @@ export function recurrenceMilliseconds(
   interval: number,
   unit: RecurrenceUnit,
 ): number {
-  const days = unit === 'weeks' ? interval * 7 : interval
-  return days * 24 * 60 * 60 * 1000
+  const unitMilliseconds: Record<RecurrenceUnit, number> = {
+    seconds: 1000,
+    minutes: 60 * 1000,
+    hours: 60 * 60 * 1000,
+    days: 24 * 60 * 60 * 1000,
+    weeks: 7 * 24 * 60 * 60 * 1000,
+  }
+  return interval * unitMilliseconds[unit]
 }
 
 export function buildSchedule(
@@ -70,23 +76,41 @@ export async function createNextOccurrence(
   while (startTimestamp <= now) startTimestamp += step
 
   const { template } = schedule
-  const created = await guild.scheduledEvents.create({
-    name: template.name,
-    description: template.description ?? undefined,
-    entityType: template.entityType,
-    privacyLevel: template.privacyLevel,
-    channel: template.channelId ?? undefined,
-    entityMetadata:
-      template.entityType === GuildScheduledEventEntityType.External
-        ? { location: template.location ?? undefined }
-        : undefined,
-    scheduledStartTime: new Date(startTimestamp),
-    scheduledEndTime:
-      template.durationMs === null
-        ? undefined
-        : new Date(startTimestamp + template.durationMs),
-    reason: `Custom recurrence ${schedule.id}`,
-  })
+  const existingEvents = await guild.scheduledEvents.fetch()
+  const expectedEndTimestamp =
+    template.durationMs === null ? null : startTimestamp + template.durationMs
+  const existing = existingEvents.find(
+    (event) =>
+      event.name === template.name &&
+      event.entityType === template.entityType &&
+      event.channelId === template.channelId &&
+      (template.entityType !== GuildScheduledEventEntityType.External ||
+        event.entityMetadata?.location === template.location) &&
+      event.scheduledStartTimestamp !== null &&
+      Math.abs(event.scheduledStartTimestamp - startTimestamp) < 1000 &&
+      (expectedEndTimestamp === null ||
+        (event.scheduledEndTimestamp !== null &&
+          Math.abs(event.scheduledEndTimestamp - expectedEndTimestamp) < 1000)),
+  )
+  const created =
+    existing ??
+    (await guild.scheduledEvents.create({
+      name: template.name,
+      description: template.description ?? undefined,
+      entityType: template.entityType,
+      privacyLevel: template.privacyLevel,
+      channel: template.channelId ?? undefined,
+      entityMetadata:
+        template.entityType === GuildScheduledEventEntityType.External
+          ? { location: template.location ?? undefined }
+          : undefined,
+      scheduledStartTime: new Date(startTimestamp),
+      scheduledEndTime:
+        template.durationMs === null
+          ? undefined
+          : new Date(startTimestamp + template.durationMs),
+      reason: `Custom recurrence ${schedule.id}`,
+    }))
 
   return {
     ...schedule,
@@ -102,13 +126,14 @@ export async function createRecurringSchedule(
   interval: number,
   unit: RecurrenceUnit,
 ): Promise<RecurringEventSchedule> {
-  const schedules = await recurringEventStore.list(source.guildId)
-  if (schedules.some((schedule) => schedule.sourceEventId === source.id)) {
-    throw new Error('這個活動已設定自訂重複規則。')
-  }
-
   const schedule = buildSchedule(source, createdBy, interval, unit)
-  const withNextOccurrence = await createNextOccurrence(client, schedule)
-  await recurringEventStore.add(withNextOccurrence)
-  return withNextOccurrence
+  await recurringEventStore.add(schedule)
+  try {
+    const withNextOccurrence = await createNextOccurrence(client, schedule)
+    await recurringEventStore.update(withNextOccurrence)
+    return withNextOccurrence
+  } catch (error) {
+    await recurringEventStore.remove(schedule.guildId, schedule.id)
+    throw error
+  }
 }
