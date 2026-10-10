@@ -14,7 +14,7 @@ RUN pnpm deploy --filter=@dc/${APP} --prod --legacy /out
 FROM node:24-slim
 ENV NODE_ENV=production
 WORKDIR /app
-COPY --from=build /out .
+COPY --chown=node:node --from=build /out .
 USER node
 # 每次啟動先同步 slash commands（失敗不影響 bot 上線），再啟動 bot
 CMD ["sh", "-c", "node dist/deploy-commands.js; exec node dist/index.js"]

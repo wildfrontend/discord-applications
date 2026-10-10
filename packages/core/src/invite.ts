@@ -9,6 +9,8 @@ export const DEFAULT_BOT_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.SendMessages,
   PermissionFlagsBits.EmbedLinks,
+  PermissionFlagsBits.CreateEvents,
+  PermissionFlagsBits.Connect,
 ]
 
 /**

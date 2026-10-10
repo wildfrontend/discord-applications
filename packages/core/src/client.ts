@@ -31,6 +31,31 @@ export function createBot({
   })
 
   client.on(Events.InteractionCreate, async (interaction) => {
+    if (interaction.isAutocomplete()) {
+      const command = commandMap.get(interaction.commandName)
+      if (!command?.autocomplete) return
+
+      try {
+        await command.autocomplete(interaction)
+      } catch (error) {
+        console.error(
+          `[bot] Autocomplete /${interaction.commandName} failed:`,
+          error,
+        )
+        if (!interaction.responded) {
+          try {
+            await interaction.respond([])
+          } catch (responseError) {
+            console.error(
+              '[bot] Failed to close autocomplete interaction:',
+              responseError,
+            )
+          }
+        }
+      }
+      return
+    }
+
     if (!interaction.isChatInputCommand()) return
 
     const command = commandMap.get(interaction.commandName)
@@ -44,10 +69,19 @@ export function createBot({
         content: '執行指令時發生錯誤。',
         flags: MessageFlags.Ephemeral,
       } as const
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(reply)
-      } else {
-        await interaction.reply(reply)
+      try {
+        if (interaction.deferred && !interaction.replied) {
+          await interaction.editReply({ content: reply.content })
+        } else if (interaction.replied) {
+          await interaction.followUp(reply)
+        } else {
+          await interaction.reply(reply)
+        }
+      } catch (responseError) {
+        console.error(
+          '[bot] Failed to send command error response:',
+          responseError,
+        )
       }
     }
   })
