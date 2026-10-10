@@ -8,7 +8,7 @@
 apps/                 # 每個 Discord application 一個資料夾
   example-bot/        # 範例 bot（/ping）
 packages/             # 共用套件
-  core/               # @dc/core：client 建立、slash command 分派與註冊、env 工具
+  core/               # @dc/core：client 建立、slash／右鍵指令分派與註冊、env 工具
 ```
 
 ## 1. 在 Discord 建立 application
@@ -55,6 +55,41 @@ pnpm --filter @dc/example-bot dev               # 開發模式（watch）
 - `/event remove`：停止排程，不刪除已建立的 Discord 活動。
 
 第一版支援「其他地方」與一般語音頻道活動；Stage 活動需要更多頻道管理權限，暫不處理。bot 需要「建立活動」權限，一般成員只能管理自己建立的活動，具有「管理活動」權限者可以管理全部排程。排程使用 SQLite，預設保存在 `apps/example-bot/data/`；舊版 JSON 資料會在啟動時自動遷移。部署 Docker 時請將持久化磁碟掛載到 `/app/data`，也可以用 `BOT_DATA_DIR` 指定其他位置。
+
+## 免費雙向翻譯
+
+翻譯功能使用自行架設的 [LibreTranslate](https://docs.libretranslate.com/)，不需要付費翻譯 API。內建繁體中文、英文、日文與韓文。
+
+頻道管理員可以為每個頻道設定不同的雙向語言組：
+
+```text
+/translate bind language-a:日文 language-b:繁體中文
+/translate status
+/translate unbind
+```
+
+綁定後，日文訊息會翻成繁體中文，繁體中文訊息則翻成日文。另一個頻道可以獨立綁定韓文與繁體中文。自動翻譯會回覆翻譯結果，並提供「查看原文」按鈕。
+
+任何訊息也可以使用 **右鍵 → Apps → 翻譯這則訊息**：
+
+- 已綁定頻道會自動翻成另一種綁定語言。
+- 未綁定或無法判斷語言時，會顯示只有操作者看得到的目標語言選單。
+- 右鍵手動翻譯不需要 Message Content Intent。
+
+頻道自動翻譯預設關閉。要啟用時：
+
+1. 到 Discord Developer Portal → application → **Bot**。
+2. 開啟 **MESSAGE CONTENT INTENT**。
+3. 在 `.env` 設定 `TRANSLATION_AUTO_ENABLED=true`。
+4. 將 `LIBRETRANSLATE_URL` 指向 LibreTranslate；本機預設為 `http://127.0.0.1:5000`。
+
+若使用 Docker Compose，根目錄的設定會同時啟動 Bot 與 LibreTranslate，並只載入 `en,ja,ko,zt` 模型：
+
+```bash
+docker compose up -d --build
+```
+
+第一次啟動需要下載語言模型，因此健康檢查可能需要數分鐘。模型與 SQLite 資料都使用 Docker volume 保存。
 
 ## 4. 部署（24 小時上線）
 

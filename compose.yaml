@@ -1,0 +1,38 @@
+services:
+  bot:
+    build:
+      context: .
+      args:
+        APP: example-bot
+    restart: unless-stopped
+    env_file:
+      - apps/example-bot/.env
+    environment:
+      BOT_DATA_DIR: /app/data
+      LIBRETRANSLATE_URL: http://libretranslate:5000
+    volumes:
+      - bot-data:/app/data
+    depends_on:
+      libretranslate:
+        condition: service_healthy
+
+  libretranslate:
+    image: libretranslate/libretranslate:v1.9.6
+    restart: unless-stopped
+    command:
+      - --disable-web-ui
+      - --load-only
+      - en,ja,ko,zt
+      - --update-models
+    volumes:
+      - libretranslate-models:/home/libretranslate/.local
+    healthcheck:
+      test: [CMD-SHELL, ./venv/bin/python scripts/healthcheck.py]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 2m
+
+volumes:
+  bot-data:
+  libretranslate-models:

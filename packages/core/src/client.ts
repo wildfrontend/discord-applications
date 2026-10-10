@@ -7,7 +7,7 @@ import {
   REST,
   Routes,
 } from 'discord.js'
-import type { SlashCommand } from './command.js'
+import type { BotCommand } from './command.js'
 
 const unavailableInteractionCodes = new Set([10062, 40060])
 
@@ -31,12 +31,12 @@ function logSafeError(prefix: string, error: unknown): void {
 
 export interface CreateBotOptions {
   token: string
-  commands: SlashCommand[]
+  commands: BotCommand[]
   intents?: ClientOptions['intents']
 }
 
 /**
- * 建立一個已綁定 slash command 分派邏輯的 Discord client。
+ * 建立一個已綁定 application command 分派邏輯的 Discord client。
  * 回傳的 client 尚未登入，呼叫 `client.login(token)` 或使用 `startBot`。
  */
 export function createBot({
@@ -44,7 +44,16 @@ export function createBot({
   intents = [GatewayIntentBits.Guilds],
 }: Omit<CreateBotOptions, 'token'>): Client {
   const client = new Client({ intents })
-  const commandMap = new Map(commands.map((c) => [c.data.name, c]))
+  const slashCommandMap = new Map(
+    commands
+      .filter((command) => command.kind === 'chat-input')
+      .map((command) => [command.data.name, command]),
+  )
+  const messageCommandMap = new Map(
+    commands
+      .filter((command) => command.kind === 'message')
+      .map((command) => [command.data.name, command]),
+  )
 
   client.once(Events.ClientReady, (c) => {
     console.log(`[bot] Logged in as ${c.user.tag} pid=${process.pid}`)
@@ -52,7 +61,7 @@ export function createBot({
 
   client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isAutocomplete()) {
-      const command = commandMap.get(interaction.commandName)
+      const command = slashCommandMap.get(interaction.commandName)
       if (!command?.autocomplete) return
 
       try {
@@ -84,21 +93,30 @@ export function createBot({
       return
     }
 
-    if (!interaction.isChatInputCommand()) return
-
-    const command = commandMap.get(interaction.commandName)
-    if (!command) return
+    const commandName = interaction.isCommand()
+      ? interaction.commandName
+      : 'unknown'
 
     try {
-      await command.execute(interaction)
+      if (interaction.isChatInputCommand()) {
+        const command = slashCommandMap.get(interaction.commandName)
+        if (!command) return
+        await command.execute(interaction)
+      } else if (interaction.isMessageContextMenuCommand()) {
+        const command = messageCommandMap.get(interaction.commandName)
+        if (!command) return
+        await command.execute(interaction)
+      } else {
+        return
+      }
     } catch (error) {
       if (isUnavailableInteraction(error)) {
         console.warn(
-          `[bot] Ignored unavailable command /${interaction.commandName} code=${discordErrorCode(error)}`,
+          `[bot] Ignored unavailable command /${commandName} code=${discordErrorCode(error)}`,
         )
         return
       }
-      logSafeError(`[bot] Command /${interaction.commandName} failed:`, error)
+      logSafeError(`[bot] Command /${commandName} failed:`, error)
       const reply = {
         content: '執行指令時發生錯誤。',
         flags: MessageFlags.Ephemeral,
@@ -134,7 +152,7 @@ export async function startBot(options: CreateBotOptions): Promise<Client> {
 export interface DeployCommandsOptions {
   token: string
   clientId: string
-  commands: SlashCommand[]
+  commands: BotCommand[]
   /** 指定時只註冊到該 guild（即時生效，適合開發）；否則註冊為全域指令 */
   guildId?: string
 }
