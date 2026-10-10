@@ -38,6 +38,24 @@ pnpm --filter @dc/example-bot dev               # 開發模式（watch）
 
 在伺服器輸入 `/ping`，bot 回覆 `Pong!` 就成功了。
 
+## 自訂重複活動
+
+先使用 Discord 原生的「建立活動」介面建立第一場，再使用 bot 擴充其週期：
+
+1. 輸入 `/event repeat`。
+2. 在 `activity` 選擇既有的單次活動。
+3. 使用 `every` 與 `unit` 設定「每 N 天」或「每 N 週」。
+4. bot 會立即建立下一場，並在執行期間持續維持一場未來活動。
+
+活動時間沿用 Discord 的時間戳記，會依每位使用者的本地時區顯示。
+
+其他管理指令：
+
+- `/event list`：列出自訂重複排程。
+- `/event remove`：停止排程，不刪除已建立的 Discord 活動。
+
+第一版支援「其他地方」與一般語音頻道活動；Stage 活動需要更多頻道管理權限，暫不處理。bot 需要「建立活動」權限，一般成員只能管理自己建立的活動，具有「管理活動」權限者可以管理全部排程。排程預設保存在 `apps/example-bot/data/`；部署 Docker 時請將持久化磁碟掛載到 `/app/data`，也可以用 `BOT_DATA_DIR` 指定其他位置。
+
 ## 4. 部署（24 小時上線）
 
 Bot 要持續執行才會回應，正式上線需要放到主機上。根目錄的 `Dockerfile` 可部署到任何支援 Docker 的平台（Railway、Fly.io、Render、VPS 等）：
