@@ -56,23 +56,26 @@ pnpm --filter @dc/example-bot dev               # 開發模式（watch）
 
 第一版支援「其他地方」與一般語音頻道活動；Stage 活動需要更多頻道管理權限，暫不處理。bot 需要「建立活動」權限，一般成員只能管理自己建立的活動，具有「管理活動」權限者可以管理全部排程。排程使用 SQLite，預設保存在 `apps/example-bot/data/`；舊版 JSON 資料會在啟動時自動遷移。部署 Docker 時請將持久化磁碟掛載到 `/app/data`，也可以用 `BOT_DATA_DIR` 指定其他位置。
 
-## 免費雙向翻譯
+## 多語言頻道翻譯
 
-翻譯功能使用自行架設的 [LibreTranslate](https://docs.libretranslate.com/)，不需要付費翻譯 API。內建繁體中文、英文、日文與韓文。
+內建繁體中文、英文、日文與韓文，使用 Groq 上的 Qwen 模型提供長句與口語翻譯，Render 等記憶體有限的環境不需要載入本機模型。
 
-頻道管理員可以為每個頻道設定不同的雙向語言組：
+將各語言文字頻道放在同一個 Discord 分類後，由頻道管理員建立同步群組：
 
 ```text
-/translate bind language-a:日文 language-b:繁體中文
+/translate group chinese-channel:#中文 english-channel:#english japanese-channel:#日本語 korean-channel:#한국어
 /translate status
-/translate unbind
+/translate ungroup
 ```
 
-綁定後，日文訊息會翻成繁體中文，繁體中文訊息則翻成日文。另一個頻道可以獨立綁定韓文與繁體中文。自動翻譯會回覆翻譯結果，並提供「查看原文」按鈕。
+至少選擇兩個頻道。群組中任何一個頻道有人發言時，bot 會翻譯並同步到其他語言頻道。也可以用 `/translate link` 保留只有兩個頻道的簡單雙向配對。
+
+多語言群組會在同一次 Groq 請求中產生所有目標語言；例如中文同步到英、日、韓仍只計為 1 次 API 請求。預設會將請求間隔至少 2.1 秒，以符合免費方案的 RPM 限制；可用 `GROQ_MIN_REQUEST_INTERVAL_MS` 調整。
 
 任何訊息也可以使用 **右鍵 → Apps → 翻譯這則訊息**：
 
-- 已綁定頻道會自動翻成另一種綁定語言。
+- 群組頻道可選擇群組內其他目標語言。
+- 雙向配對頻道會自動翻成另一種配對語言。
 - 未綁定或無法判斷語言時，會顯示只有操作者看得到的目標語言選單。
 - 右鍵手動翻譯不需要 Message Content Intent。
 
@@ -81,15 +84,22 @@ pnpm --filter @dc/example-bot dev               # 開發模式（watch）
 1. 到 Discord Developer Portal → application → **Bot**。
 2. 開啟 **MESSAGE CONTENT INTENT**。
 3. 在 `.env` 設定 `TRANSLATION_AUTO_ENABLED=true`。
-4. 將 `LIBRETRANSLATE_URL` 指向 LibreTranslate；本機預設為 `http://127.0.0.1:5000`。
+4. 到 Groq Console 建立免費 API 金鑰後設定：
 
-若使用 Docker Compose，根目錄的設定會同時啟動 Bot 與 LibreTranslate，並只載入 `en,ja,ko,zt` 模型：
+```env
+GROQ_API_KEY=...
+GROQ_MODEL=qwen/qwen3.8-27b
+```
+
+啟用前應告知伺服器成員訊息會送往第三方服務。`GROQ_API_KEY` 不可 commit 到 Git。此設定不會以 Gemini 作為備援；Groq 失敗或額度用完時只會記錄錯誤。
+
+若使用 Docker Compose，根目錄設定只會啟動 Bot：
 
 ```bash
 docker compose up -d --build
 ```
 
-第一次啟動需要下載語言模型，因此健康檢查可能需要數分鐘。模型與 SQLite 資料都使用 Docker volume 保存。
+SQLite 資料使用 Docker volume 保存。
 
 ## 4. 部署（24 小時上線）
 

@@ -13,9 +13,11 @@ import {
   targetSelectPrefix,
 } from './components.js'
 import { isTranslationLanguage, languageNames } from './languages.js'
+import { groqTranslationClient } from './groq-client.js'
 import {
   shouldTranslateMessage,
   translateToLanguage,
+  translateToLanguages,
   translationContent,
 } from './service.js'
 import {
@@ -48,25 +50,33 @@ async function sendTranslatedMessage(
   targetChannelId: string,
   targetLanguage: Parameters<typeof translateToLanguage>[1],
 ): Promise<void> {
-  const targetChannel = await message.guild.channels.fetch(targetChannelId)
-  if (!targetChannel?.isSendable()) {
-    throw new Error(`目標頻道 ${targetChannelId} 不存在或 Bot 無法傳送訊息。`)
-  }
   const translated = await translateToLanguage(
     message.content,
     targetLanguage,
   )
+  await sendTranslatedText(message, targetChannelId, translated.text)
+}
+
+async function sendTranslatedText(
+  message: Message<true>,
+  targetChannelId: string,
+  translatedText: string,
+): Promise<void> {
+  const targetChannel = await message.guild.channels.fetch(targetChannelId)
+  if (!targetChannel?.isSendable()) {
+    throw new Error(`目標頻道 ${targetChannelId} 不存在或 Bot 無法傳送訊息。`)
+  }
   const author = escapeMarkdown(
     message.member?.displayName ?? message.author.displayName,
   )
-  const header = `🌐 **${author}**｜[查看原訊息](${message.url})\n`
+  const header = `**${author}**｜[查看原訊息](${message.url})\n`
   const available = 2000 - header.length
-  const translatedText =
-    translated.text.length <= available
-      ? translated.text
-      : `${translated.text.slice(0, Math.max(0, available - 1))}…`
+  const content =
+    translatedText.length <= available
+      ? translatedText
+      : `${translatedText.slice(0, Math.max(0, available - 1))}…`
   await targetChannel.send({
-    content: `${header}${translatedText}`,
+    content: `${header}${content}`,
     allowedMentions: { parse: [], repliedUser: false },
   })
 }
@@ -76,6 +86,12 @@ export function startTranslationFeature(
   { automatic }: TranslationFeatureOptions,
 ): void {
   let lastAutomaticErrorAt = 0
+
+  if (!process.env.GROQ_API_KEY?.trim()) {
+    console.warn(
+      '[translate] GROQ_API_KEY is missing; translation requests will fail until it is configured and the bot is restarted.',
+    )
+  }
 
   if (automatic) {
     client.on(Events.MessageCreate, async (message) => {
@@ -100,12 +116,22 @@ export function startTranslationFeature(
           const targets = members.filter(
             (member) => member.channelId !== message.channelId,
           )
+          const translations = await translateToLanguages(
+            message.content,
+            targets.map((target) => target.language),
+          )
+          const translationsByLanguage = new Map(
+            translations.map((translation) => [
+              translation.target,
+              translation.text,
+            ]),
+          )
           const results = await Promise.allSettled(
             targets.map((target) =>
-              sendTranslatedMessage(
+              sendTranslatedText(
                 message,
                 target.channelId,
-                target.language,
+                translationsByLanguage.get(target.language)!,
               ),
             ),
           )
@@ -222,6 +248,6 @@ export function startTranslationFeature(
   })
 
   console.log(
-    `[translate] Feature ready (automatic=${automatic ? 'enabled' : 'disabled'}, languages=${Object.values(languageNames).join(', ')})`,
+    `[translate] Feature ready (automatic=${automatic ? 'enabled' : 'disabled'}, provider=${groqTranslationClient.name}, languages=${Object.values(languageNames).join(', ')})`,
   )
 }
