@@ -1,4 +1,4 @@
-import { libreTranslateClient } from './client.js'
+import { groqTranslationClient as translationClient } from './groq-client.js'
 import { languageNames, type TranslationLanguage } from './languages.js'
 import type { TranslationBinding } from './store.js'
 
@@ -41,15 +41,15 @@ function detectByScript(
 export async function detectMessageLanguage(
   text: string,
 ): Promise<TranslationLanguage | null> {
-  // LibreTranslate commonly mistakes Han-only Traditional Chinese text for
-  // Japanese. Kana and Hangul are unambiguous, while Han-only text defaults
-  // to Traditional Chinese; normal Japanese sentences usually contain kana.
+  // Pure Han text is ambiguous between Chinese and Japanese. Kana and Hangul
+  // are unambiguous, while Han-only text defaults to Traditional Chinese;
+  // normal Japanese sentences usually contain kana.
   if (hangulPattern.test(text)) return 'ko'
   if (kanaPattern.test(text)) return 'ja'
   if (hanPattern.test(text)) return 'zt'
   if (latinPattern.test(text)) return 'en'
 
-  const detected = await libreTranslateClient.detect(text)
+  const detected = await translationClient.detect(text)
   return detected.language
 }
 
@@ -60,7 +60,7 @@ export async function detectBindingLanguage(
   const scriptLanguage = detectByScript(text, binding)
   if (scriptLanguage) return scriptLanguage
 
-  const detected = await libreTranslateClient.detect(text)
+  const detected = await translationClient.detect(text)
   if (detected.language && bindingHas(binding, detected.language)) {
     return detected.language
   }
@@ -78,7 +78,7 @@ export async function translateAcrossBinding(
   if (!source) return null
   const target =
     source === binding.languageA ? binding.languageB : binding.languageA
-  const translated = await libreTranslateClient.translate(text, target, source)
+  const translated = await translationClient.translate(text, target, source)
   return { source, target, text: translated.text }
 }
 
@@ -90,7 +90,7 @@ export async function translateToLanguage(
   if (source === target) {
     return { source: target, target, text }
   }
-  const translated = await libreTranslateClient.translate(
+  const translated = await translationClient.translate(
     text,
     target,
     source ?? 'auto',
@@ -100,6 +100,28 @@ export async function translateToLanguage(
     target,
     text: translated.text,
   }
+}
+
+export async function translateToLanguages(
+  text: string,
+  targets: readonly TranslationLanguage[],
+): Promise<CompletedTranslation[]> {
+  const source = await detectMessageLanguage(text)
+  const uniqueTargets = [...new Set(targets)]
+  const targetsToTranslate = uniqueTargets.filter(
+    (target) => target !== source,
+  )
+  const result = await translationClient.translateMany(
+    text,
+    targetsToTranslate,
+    source ?? 'auto',
+  )
+
+  return uniqueTargets.map((target) => ({
+    source: source ?? result.detectedLanguage,
+    target,
+    text: target === source ? text : result.translations[target]!,
+  }))
 }
 
 export function shouldTranslateMessage(text: string): boolean {
@@ -114,7 +136,7 @@ export function shouldTranslateMessage(text: string): boolean {
 
 export function translationContent(result: CompletedTranslation): string {
   const sourceLabel = result.source ? languageNames[result.source] : '自動偵測'
-  const header = `🌐 **${sourceLabel} → ${languageNames[result.target]}**\n`
+  const header = `**${sourceLabel} → ${languageNames[result.target]}**\n`
   const available = 2000 - header.length
   const text =
     result.text.length <= available
