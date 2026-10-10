@@ -1,5 +1,6 @@
 import {
   type Client,
+  escapeMarkdown,
   Events,
   MessageFlags,
   type TextBasedChannel,
@@ -13,11 +14,10 @@ import {
 import { isTranslationLanguage, languageNames } from './languages.js'
 import {
   shouldTranslateMessage,
-  translateAcrossBinding,
   translateToLanguage,
   translationContent,
 } from './service.js'
-import { translationBindingStore } from './store.js'
+import { translationChannelLinkStore } from './store.js'
 
 interface TranslationFeatureOptions {
   automatic: boolean
@@ -49,6 +49,7 @@ export function startTranslationFeature(
     client.on(Events.MessageCreate, async (message) => {
       if (
         !message.guildId ||
+        !message.guild ||
         message.author.bot ||
         message.webhookId ||
         !shouldTranslateMessage(message.content)
@@ -56,18 +57,37 @@ export function startTranslationFeature(
         return
       }
 
-      const binding = await translationBindingStore.get(message.channelId)
-      if (!binding) return
+      const link = await translationChannelLinkStore.get(message.channelId)
+      if (!link) return
+
+      const sourceIsA = link.channelAId === message.channelId
+      const targetChannelId = sourceIsA
+        ? link.channelBId
+        : link.channelAId
+      const targetLanguage = sourceIsA ? link.languageB : link.languageA
 
       try {
-        const translated = await translateAcrossBinding(
-          message.content,
-          binding,
+        const targetChannel = await message.guild.channels.fetch(
+          targetChannelId,
         )
-        if (!translated) return
-        await message.reply({
-          content: translationContent(translated),
-          components: [originalButton(message.channelId, message.id)],
+        if (!targetChannel?.isSendable()) {
+          throw new Error('目標頻道不存在或 Bot 無法傳送訊息。')
+        }
+        const translated = await translateToLanguage(
+          message.content,
+          targetLanguage,
+        )
+        const author = escapeMarkdown(
+          message.member?.displayName ?? message.author.displayName,
+        )
+        const header = `🌐 **${author}**｜[查看原訊息](${message.url})\n`
+        const available = 2000 - header.length
+        const translatedText =
+          translated.text.length <= available
+            ? translated.text
+            : `${translated.text.slice(0, Math.max(0, available - 1))}…`
+        await targetChannel.send({
+          content: `${header}${translatedText}`,
           allowedMentions: { parse: [], repliedUser: false },
         })
       } catch (error) {

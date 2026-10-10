@@ -38,6 +38,21 @@ function detectByScript(
   return null
 }
 
+export async function detectMessageLanguage(
+  text: string,
+): Promise<TranslationLanguage | null> {
+  // LibreTranslate commonly mistakes Han-only Traditional Chinese text for
+  // Japanese. Kana and Hangul are unambiguous, while Han-only text defaults
+  // to Traditional Chinese; normal Japanese sentences usually contain kana.
+  if (hangulPattern.test(text)) return 'ko'
+  if (kanaPattern.test(text)) return 'ja'
+  if (hanPattern.test(text)) return 'zt'
+  if (latinPattern.test(text)) return 'en'
+
+  const detected = await libreTranslateClient.detect(text)
+  return detected.language
+}
+
 export async function detectBindingLanguage(
   text: string,
   binding: TranslationBinding,
@@ -71,17 +86,17 @@ export async function translateToLanguage(
   text: string,
   target: TranslationLanguage,
 ): Promise<CompletedTranslation> {
-  const detected = await libreTranslateClient.detect(text)
-  if (detected.language === target) {
+  const source = await detectMessageLanguage(text)
+  if (source === target) {
     return { source: target, target, text }
   }
   const translated = await libreTranslateClient.translate(
     text,
     target,
-    detected.language ?? 'auto',
+    source ?? 'auto',
   )
   return {
-    source: detected.language ?? translated.detectedLanguage,
+    source: source ?? translated.detectedLanguage,
     target,
     text: translated.text,
   }

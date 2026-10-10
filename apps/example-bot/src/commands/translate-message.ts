@@ -8,9 +8,13 @@ import { targetLanguageSelect } from '../translation/components.js'
 import {
   type CompletedTranslation,
   translateAcrossBinding,
+  translateToLanguage,
   translationContent,
 } from '../translation/service.js'
-import { translationBindingStore } from '../translation/store.js'
+import {
+  translationBindingStore,
+  translationChannelLinkStore,
+} from '../translation/store.js'
 
 export default defineMessageCommand({
   data: new ContextMenuCommandBuilder()
@@ -29,8 +33,11 @@ export default defineMessageCommand({
       return
     }
 
-    const binding = await translationBindingStore.get(interaction.channelId)
-    if (!binding) {
+    const link = await translationChannelLinkStore.get(interaction.channelId)
+    const binding = link
+      ? null
+      : await translationBindingStore.get(interaction.channelId)
+    if (!link && !binding) {
       await interaction.reply({
         content: '請選擇目標語言：',
         components: [targetLanguageSelect(interaction.channelId, message.id)],
@@ -42,7 +49,15 @@ export default defineMessageCommand({
     await interaction.deferReply({ flags: MessageFlags.Ephemeral })
     let translated: CompletedTranslation | null
     try {
-      translated = await translateAcrossBinding(message.content, binding)
+      if (link) {
+        const target =
+          link.channelAId === interaction.channelId
+            ? link.languageB
+            : link.languageA
+        translated = await translateToLanguage(message.content, target)
+      } else {
+        translated = await translateAcrossBinding(message.content, binding!)
+      }
     } catch (error) {
       const details = error instanceof Error ? error.message : String(error)
       await interaction.editReply(
@@ -55,8 +70,7 @@ export default defineMessageCommand({
         content: '無法確定原文屬於哪一種綁定語言，請手動選擇目標語言：',
         components: [
           targetLanguageSelect(interaction.channelId, message.id, [
-            binding.languageA,
-            binding.languageB,
+            ...(binding ? [binding.languageA, binding.languageB] : []),
           ]),
         ],
       })
