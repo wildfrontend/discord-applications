@@ -14,6 +14,7 @@ import {
 import {
   translationBindingStore,
   translationChannelLinkStore,
+  translationGroupStore,
 } from '../translation/store.js'
 
 export default defineMessageCommand({
@@ -28,6 +29,35 @@ export default defineMessageCommand({
     if (!message.content.trim()) {
       await interaction.reply({
         content: '這則訊息沒有可翻譯的文字。',
+        flags: MessageFlags.Ephemeral,
+      })
+      return
+    }
+
+    const groupMember = await translationGroupStore.getMember(
+      interaction.channelId,
+    )
+    if (groupMember) {
+      const members = await translationGroupStore.list(groupMember.categoryId)
+      const targetLanguages = members
+        .filter((member) => member.channelId !== interaction.channelId)
+        .map((member) => member.language)
+      if (targetLanguages.length === 0) {
+        await interaction.reply({
+          content: '這個翻譯群組沒有其他可用的語言頻道。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+      await interaction.reply({
+        content: '請選擇群組內的目標語言：',
+        components: [
+          targetLanguageSelect(
+            interaction.channelId,
+            message.id,
+            targetLanguages,
+          ),
+        ],
         flags: MessageFlags.Ephemeral,
       })
       return
