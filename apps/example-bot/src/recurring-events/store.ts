@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
-import { dataDirectory, dataFile } from './storage.js'
+import { dataFile } from './storage.js'
 import type { RecurrenceUnit, RecurringEventSchedule } from './types.js'
 
 interface ScheduleRow {
@@ -15,8 +15,6 @@ interface ScheduleRow {
   next_start_at: string
   template_json: string
 }
-
-mkdirSync(dataDirectory, { recursive: true })
 
 const database = new DatabaseSync(dataFile('recurring-events.sqlite'))
 database.exec(`
