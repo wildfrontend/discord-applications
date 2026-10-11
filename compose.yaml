@@ -8,7 +8,8 @@ services:
     init: true
     restart: unless-stopped
     env_file:
-      - apps/dino-mutant-collections/.env
+      - path: apps/dino-mutant-collections/.env
+        required: false
     environment:
       BOT_DATA_DIR: /app/data
       DATABASE_DRIVER: sqlite
@@ -28,6 +29,24 @@ services:
       retries: 3
       start_period: 20s
     stop_grace_period: 30s
+
+  setup:
+    image: dino-mutant-collections:local
+    build:
+      context: .
+      args:
+        APP: dino-mutant-collections
+    profiles:
+      - tools
+    stdin_open: true
+    tty: true
+    environment:
+      BOT_ENV_FILE: /config/.env
+    volumes:
+      - ./apps/dino-mutant-collections:/config
+    entrypoint:
+      - node
+      - dist/setup.js
 
 volumes:
   bot-data:
