@@ -1,0 +1,45 @@
+services:
+  bot:
+    image: ghcr.io/wildfrontend/dino-mutant-collections:latest
+    pull_policy: always
+    init: true
+    restart: unless-stopped
+    env_file:
+      - path: apps/dino-mutant-collections/.env
+        required: false
+    environment:
+      BOT_DATA_DIR: /app/data
+      PORT: 10000
+    ports:
+      - 127.0.0.1:10000:10000
+    volumes:
+      - bot-data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:10000/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 30s
+
+  setup:
+    image: ghcr.io/wildfrontend/dino-mutant-collections:latest
+    pull_policy: always
+    profiles:
+      - tools
+    stdin_open: true
+    tty: true
+    environment:
+      BOT_ENV_FILE: /config/.env
+    volumes:
+      - ./apps/dino-mutant-collections:/config
+    entrypoint:
+      - node
+      - dist/setup.js
+
+volumes:
+  bot-data:
