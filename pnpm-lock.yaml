@@ -21,6 +21,15 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  apps/dev-panel:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.4
+        version: 26.6.4
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+
   apps/dino-mutant-collections:
     dependencies:
       '@dc/core':

@@ -7,6 +7,7 @@
 ```
 apps/                 # 每個 Discord application 一個資料夾
   dino-mutant-collections/ # Discord 活動與多語言翻譯 bot
+  dev-panel/              # 本機資料檢視與重設後台
 packages/             # 共用套件
   core/               # @dc/core：client 建立、slash／右鍵指令分派與註冊、env 工具
 ```
@@ -44,7 +45,7 @@ pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（wat
 
 1. 輸入 `/event repeat`。
 2. 在 `activity` 選擇既有的單次活動。
-3. 使用 `every` 與 `unit` 設定「每 N 秒／分鐘／小時／天／週」；秒級排程最少 10 秒，僅建議用於測試。
+3. 使用 `every` 與 `unit` 設定「每 N 分鐘／小時／天／週」；分鐘週期最少 15 分鐘。
 4. bot 會立即建立下一場，並在執行期間持續維持一場未來活動。
 
 活動時間沿用 Discord 的時間戳記，會依每位使用者的本地時區顯示。
@@ -63,7 +64,7 @@ pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（wat
 將各語言文字頻道放在同一個 Discord 分類後，由頻道管理員建立同步群組：
 
 ```text
-/translate group chinese-channel:#中文 english-channel:#english japanese-channel:#日本語 korean-channel:#한국어
+/translate group category:翻譯頻道 chinese-channel:#中文 english-channel:#english japanese-channel:#日本語 korean-channel:#한국어
 /translate status
 /translate ungroup
 ```
@@ -74,9 +75,10 @@ pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（wat
 
 任何訊息也可以使用 **右鍵 → Apps → 翻譯這則訊息**：
 
-- 群組頻道可選擇群組內其他目標語言。
+- 群組頻道可選擇任一支援的目標語言。
 - 雙向配對頻道會自動翻成另一種配對語言。
 - 未綁定或無法判斷語言時，會顯示只有操作者看得到的目標語言選單。
+- 可用 `/translate config language:繁體中文` 儲存個人預設語言，之後右鍵翻譯不需重複選擇。
 - 右鍵手動翻譯不需要 Message Content Intent。
 
 頻道自動翻譯預設關閉。要啟用時：
@@ -122,9 +124,20 @@ docker run -d --restart unless-stopped \
 | 指令 | 說明 |
 | --- | --- |
 | `pnpm dev` | 啟動所有 app 的開發模式 |
+| `pnpm dev:panel` | 只啟動本機 Dev Panel（http://127.0.0.1:4310） |
 | `pnpm build` | 建置所有套件與 app |
 | `pnpm typecheck` | 型別檢查 |
 | `pnpm lint` / `pnpm format` | Biome 檢查 / 自動修正 |
+
+## Dev Panel
+
+Bot 啟動後，可在另一個終端開啟本機後台：
+
+```bash
+pnpm dev:panel
+```
+
+瀏覽器開啟 `http://127.0.0.1:4310`，可以查看 Bot 程序、活動排程、翻譯群組與個人語言偏好，並執行單項重設。面板只監聽本機 loopback，不應部署到公開網路。預設讀取 `apps/dino-mutant-collections/data/`，若 Bot 使用自訂資料目錄，請為面板設定相同的 `BOT_DATA_DIR`。
 
 ## 新增一個 application
 
