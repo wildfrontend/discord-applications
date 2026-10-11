@@ -33,6 +33,12 @@ export interface TranslationGroupMember {
   updatedAt: string
 }
 
+export interface TranslationPreference {
+  userId: string
+  language: TranslationLanguage
+  updatedAt: string
+}
+
 interface BindingRow {
   guild_id: string
   channel_id: string
@@ -61,6 +67,12 @@ interface GroupMemberRow {
   language: TranslationLanguage
   created_by: string
   created_at: string
+  updated_at: string
+}
+
+interface PreferenceRow {
+  user_id: string
+  language: TranslationLanguage
   updated_at: string
 }
 
@@ -110,6 +122,13 @@ database.exec(`
     ON translation_group_channels (category_id);
   CREATE INDEX IF NOT EXISTS translation_group_channels_guild
     ON translation_group_channels (guild_id);
+
+  CREATE TABLE IF NOT EXISTS translation_user_preferences (
+    user_id TEXT PRIMARY KEY,
+    language TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (language IN ('zt', 'en', 'ja', 'ko'))
+  );
 `)
 
 const getStatement = database.prepare(`
@@ -182,6 +201,22 @@ const insertGroupMemberStatement = database.prepare(`
     created_by, created_at, updated_at
   ) VALUES (?, ?, ?, ?, ?, ?, ?)
 `)
+const getPreferenceStatement = database.prepare(`
+  SELECT user_id, language, updated_at
+  FROM translation_user_preferences
+  WHERE user_id = ?
+`)
+const upsertPreferenceStatement = database.prepare(`
+  INSERT INTO translation_user_preferences (user_id, language, updated_at)
+  VALUES (?, ?, ?)
+  ON CONFLICT(user_id) DO UPDATE SET
+    language = excluded.language,
+    updated_at = excluded.updated_at
+`)
+const removePreferenceStatement = database.prepare(`
+  DELETE FROM translation_user_preferences
+  WHERE user_id = ?
+`)
 
 function toBinding(row: BindingRow): TranslationBinding {
   return {
@@ -216,6 +251,14 @@ function toGroupMember(row: GroupMemberRow): TranslationGroupMember {
     language: row.language,
     createdBy: row.created_by,
     createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function toPreference(row: PreferenceRow): TranslationPreference {
+  return {
+    userId: row.user_id,
+    language: row.language,
     updatedAt: row.updated_at,
   }
 }
@@ -264,10 +307,9 @@ export const translationBindingStore = {
 
 export const translationChannelLinkStore = {
   async get(channelId: string): Promise<TranslationChannelLink | null> {
-    const row = getChannelLinkStatement.get(
-      channelId,
-      channelId,
-    ) as ChannelLinkRow | undefined
+    const row = getChannelLinkStatement.get(channelId, channelId) as
+      | ChannelLinkRow
+      | undefined
     return row ? toChannelLink(row) : null
   },
 
@@ -320,11 +362,7 @@ export const translationChannelLinkStore = {
   },
 
   async remove(guildId: string, channelId: string): Promise<boolean> {
-    const result = removeChannelLinkStatement.run(
-      guildId,
-      channelId,
-      channelId,
-    )
+    const result = removeChannelLinkStatement.run(guildId, channelId, channelId)
     return Number(result.changes) > 0
   },
 }
@@ -391,6 +429,35 @@ export const translationGroupStore = {
 
   async remove(guildId: string, categoryId: string): Promise<boolean> {
     const result = removeGroupStatement.run(guildId, categoryId)
+    return Number(result.changes) > 0
+  },
+}
+
+export const translationPreferenceStore = {
+  async get(userId: string): Promise<TranslationPreference | null> {
+    const row = getPreferenceStatement.get(userId) as PreferenceRow | undefined
+    return row ? toPreference(row) : null
+  },
+
+  async set(
+    userId: string,
+    language: TranslationLanguage,
+  ): Promise<TranslationPreference> {
+    const preference: TranslationPreference = {
+      userId,
+      language,
+      updatedAt: new Date().toISOString(),
+    }
+    upsertPreferenceStatement.run(
+      preference.userId,
+      preference.language,
+      preference.updatedAt,
+    )
+    return preference
+  },
+
+  async remove(userId: string): Promise<boolean> {
+    const result = removePreferenceStatement.run(userId)
     return Number(result.changes) > 0
   },
 }

@@ -15,6 +15,7 @@ import {
   translationBindingStore,
   translationChannelLinkStore,
   translationGroupStore,
+  translationPreferenceStore,
 } from '../translation/store.js'
 
 export default defineMessageCommand({
@@ -34,30 +35,34 @@ export default defineMessageCommand({
       return
     }
 
+    const preference = await translationPreferenceStore.get(interaction.user.id)
+    if (preference) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral })
+      try {
+        const translated = await translateToLanguage(
+          message.content,
+          preference.language,
+        )
+        await interaction.editReply({
+          content: translationContent(translated),
+          allowedMentions: { parse: [] },
+        })
+      } catch (error) {
+        const details = error instanceof Error ? error.message : String(error)
+        await interaction.editReply(
+          `翻譯服務目前無法使用：${details}`.slice(0, 1900),
+        )
+      }
+      return
+    }
+
     const groupMember = await translationGroupStore.getMember(
       interaction.channelId,
     )
     if (groupMember) {
-      const members = await translationGroupStore.list(groupMember.categoryId)
-      const targetLanguages = members
-        .filter((member) => member.channelId !== interaction.channelId)
-        .map((member) => member.language)
-      if (targetLanguages.length === 0) {
-        await interaction.reply({
-          content: '這個翻譯群組沒有其他可用的語言頻道。',
-          flags: MessageFlags.Ephemeral,
-        })
-        return
-      }
       await interaction.reply({
-        content: '請選擇群組內的目標語言：',
-        components: [
-          targetLanguageSelect(
-            interaction.channelId,
-            message.id,
-            targetLanguages,
-          ),
-        ],
+        content: '請選擇目標語言：',
+        components: [targetLanguageSelect(interaction.channelId, message.id)],
         flags: MessageFlags.Ephemeral,
       })
       return
@@ -85,8 +90,10 @@ export default defineMessageCommand({
             ? link.languageB
             : link.languageA
         translated = await translateToLanguage(message.content, target)
+      } else if (binding) {
+        translated = await translateAcrossBinding(message.content, binding)
       } else {
-        translated = await translateAcrossBinding(message.content, binding!)
+        translated = null
       }
     } catch (error) {
       const details = error instanceof Error ? error.message : String(error)
