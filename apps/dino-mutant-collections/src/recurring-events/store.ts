@@ -16,6 +16,20 @@ interface ScheduleRow {
   template_json: string
 }
 
+export interface EventNotificationSettings {
+  guildId: string
+  channelId: string
+  updatedBy: string
+  updatedAt: string
+}
+
+interface NotificationSettingsRow {
+  guild_id: string
+  channel_id: string
+  updated_by: string
+  updated_at: string
+}
+
 const database = new DatabaseSync(dataFile('recurring-events.sqlite'))
 database.exec(`
   PRAGMA journal_mode = WAL;
@@ -41,6 +55,14 @@ const createTableSql = `
 `
 
 database.exec(createTableSql)
+database.exec(`
+  CREATE TABLE IF NOT EXISTS event_notification_settings (
+    guild_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`)
 
 const schema = database
   .prepare(
@@ -109,6 +131,23 @@ const updateStatement = database.prepare(`
 `)
 const removeStatement = database.prepare(`
   DELETE FROM recurring_events WHERE guild_id = ? AND id = ?
+`)
+const getNotificationSettingsStatement = database.prepare(`
+  SELECT guild_id, channel_id, updated_by, updated_at
+  FROM event_notification_settings
+  WHERE guild_id = ?
+`)
+const upsertNotificationSettingsStatement = database.prepare(`
+  INSERT INTO event_notification_settings (
+    guild_id, channel_id, updated_by, updated_at
+  ) VALUES (?, ?, ?, ?)
+  ON CONFLICT(guild_id) DO UPDATE SET
+    channel_id = excluded.channel_id,
+    updated_by = excluded.updated_by,
+    updated_at = excluded.updated_at
+`)
+const removeNotificationSettingsStatement = database.prepare(`
+  DELETE FROM event_notification_settings WHERE guild_id = ?
 `)
 
 function toSchedule(row: ScheduleRow): RecurringEventSchedule {
@@ -206,6 +245,47 @@ export const recurringEventStore = {
 
   async remove(guildId: string, id: string): Promise<boolean> {
     const result = removeStatement.run(guildId, id)
+    return Number(result.changes) > 0
+  },
+}
+
+export const eventNotificationStore = {
+  async get(guildId: string): Promise<EventNotificationSettings | null> {
+    const row = getNotificationSettingsStatement.get(guildId) as
+      | NotificationSettingsRow
+      | undefined
+    return row
+      ? {
+          guildId: row.guild_id,
+          channelId: row.channel_id,
+          updatedBy: row.updated_by,
+          updatedAt: row.updated_at,
+        }
+      : null
+  },
+
+  async set(
+    guildId: string,
+    channelId: string,
+    updatedBy: string,
+  ): Promise<EventNotificationSettings> {
+    const settings: EventNotificationSettings = {
+      guildId,
+      channelId,
+      updatedBy,
+      updatedAt: new Date().toISOString(),
+    }
+    upsertNotificationSettingsStatement.run(
+      settings.guildId,
+      settings.channelId,
+      settings.updatedBy,
+      settings.updatedAt,
+    )
+    return settings
+  },
+
+  async remove(guildId: string): Promise<boolean> {
+    const result = removeNotificationSettingsStatement.run(guildId)
     return Number(result.changes) > 0
   },
 }

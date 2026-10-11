@@ -24,6 +24,7 @@ const elements = {
   dataDirectory: document.querySelector('#data-directory'),
   scheduleTable: document.querySelector('#schedule-table'),
   scheduleEmpty: document.querySelector('#schedule-empty'),
+  eventNotificationMeta: document.querySelector('#event-notification-meta'),
   groupList: document.querySelector('#group-list'),
   groupEmpty: document.querySelector('#group-empty'),
   preferenceList: document.querySelector('#preference-list'),
@@ -172,6 +173,10 @@ function render(data) {
   elements.dataDirectory.textContent = data.panel.dataDirectory
   elements.lastUpdated.textContent = `最後同步 ${formatDate(data.panel.now)}`
   elements.translationMeta.textContent = `${data.translation.channelLinkCount} 組雙向連結 · ${data.translation.legacyBindingCount} 筆舊版綁定`
+  elements.eventNotificationMeta.textContent =
+    data.eventNotifications.length === 0
+      ? '未設定通知頻道 · 刪除排程不會刪除 Discord 活動'
+      : `通知頻道 ${data.eventNotifications.map((settings) => shortId(settings.channelId)).join('、')} · 刪除排程不會刪除 Discord 活動`
 
   elements.botStatus.className = `status-pill ${data.bot?.running ? 'is-online' : 'is-offline'}`
   elements.botStatus.textContent = data.bot?.running
