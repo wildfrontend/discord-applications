@@ -54,6 +54,8 @@ pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（wat
 
 - `/event list`：列出自訂重複排程。
 - `/event remove`：停止排程，不刪除已建立的 Discord 活動。
+- `/event notify channel:#活動通知`：設定全伺服器共用的活動通知頻道；Bot 建立下一場循環活動時會發送時間與活動連結。
+- `/event notify-disable`：關閉活動頻道通知。
 
 第一版支援「其他地方」與一般語音頻道活動；Stage 活動需要更多頻道管理權限，暫不處理。bot 需要「建立活動」權限，一般成員只能管理自己建立的活動，具有「管理活動」權限者可以管理全部排程。排程使用 SQLite，預設保存在 `apps/dino-mutant-collections/data/`；舊版 JSON 資料會在啟動時自動遷移。部署 Docker 時請將持久化磁碟掛載到 `/app/data`，也可以用 `BOT_DATA_DIR` 指定其他位置。
 

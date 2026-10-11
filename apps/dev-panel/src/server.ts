@@ -159,6 +159,18 @@ function dashboardData() {
     nextStartAt: row.next_start_at,
     name: parseTemplateName(row.template_json),
   }))
+  const eventNotifications = readRows(
+    recurringDatabaseFile,
+    'event_notification_settings',
+    `SELECT guild_id, channel_id, updated_by, updated_at
+       FROM event_notification_settings
+      ORDER BY guild_id`,
+  ).map((row) => ({
+    guildId: row.guild_id,
+    channelId: row.channel_id,
+    updatedBy: row.updated_by,
+    updatedAt: row.updated_at,
+  }))
 
   const groupMembers = readRows(
     translationDatabaseFile,
@@ -230,6 +242,7 @@ function dashboardData() {
       },
     },
     schedules,
+    eventNotifications,
     translation: {
       groups: [...groupsByCategory.values()],
       preferences,

@@ -1,5 +1,6 @@
 import { defineCommand } from '@dc/core'
 import {
+  ChannelType,
   GuildScheduledEventEntityType,
   GuildScheduledEventStatus,
   MessageFlags,
@@ -7,7 +8,10 @@ import {
   SlashCommandBuilder,
 } from 'discord.js'
 import { createRecurringSchedule } from '../recurring-events/service.js'
-import { recurringEventStore } from '../recurring-events/store.js'
+import {
+  eventNotificationStore,
+  recurringEventStore,
+} from '../recurring-events/store.js'
 import type { RecurrenceUnit } from '../recurring-events/types.js'
 
 const unitLabels: Record<RecurrenceUnit, string> = {
@@ -69,6 +73,26 @@ export default defineCommand({
     )
     .addSubcommand((subcommand) =>
       subcommand.setName('list').setDescription('查看自訂重複活動'),
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('notify')
+        .setDescription('設定循環活動建立後的通知頻道')
+        .addChannelOption((option) =>
+          option
+            .setName('channel')
+            .setDescription('新活動建立時要發送通知的頻道')
+            .setRequired(true)
+            .addChannelTypes(
+              ChannelType.GuildText,
+              ChannelType.GuildAnnouncement,
+            ),
+        ),
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('notify-disable')
+        .setDescription('關閉循環活動頻道通知'),
     )
     .addSubcommand((subcommand) =>
       subcommand
@@ -177,6 +201,69 @@ export default defineCommand({
 
     const subcommand = interaction.options.getSubcommand()
 
+    if (subcommand === 'notify' || subcommand === 'notify-disable') {
+      if (
+        !interaction.memberPermissions.has(PermissionFlagsBits.ManageEvents)
+      ) {
+        await interaction.reply({
+          content: '你需要「管理活動」權限才能修改活動通知頻道。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+
+      if (subcommand === 'notify-disable') {
+        const removed = await eventNotificationStore.remove(interaction.guildId)
+        await interaction.reply({
+          content: removed
+            ? '已關閉循環活動頻道通知。'
+            : '目前尚未設定活動通知頻道。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+
+      const channel = interaction.options.getChannel('channel', true)
+      if (
+        (channel.type !== ChannelType.GuildText &&
+          channel.type !== ChannelType.GuildAnnouncement) ||
+        channel.guildId !== interaction.guildId
+      ) {
+        await interaction.reply({
+          content: '請選擇這個伺服器內的文字或公告頻道。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+      const botMember = interaction.guild.members.me
+      if (
+        !botMember ||
+        !channel
+          .permissionsFor(botMember)
+          .has([
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+          ])
+      ) {
+        await interaction.reply({
+          content: `Bot 在 ${channel} 缺少「查看頻道」或「傳送訊息」權限。`,
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+
+      await eventNotificationStore.set(
+        interaction.guildId,
+        channel.id,
+        interaction.user.id,
+      )
+      await interaction.reply({
+        content: `活動通知頻道已設定為 ${channel}；之後 Bot 建立下一場循環活動時會在這裡通知。`,
+        flags: MessageFlags.Ephemeral,
+      })
+      return
+    }
+
     if (subcommand === 'repeat') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral })
       const eventId = interaction.options.getString('activity', true)
@@ -255,6 +342,7 @@ export default defineCommand({
     }
 
     if (subcommand === 'list') {
+      const notification = await eventNotificationStore.get(interaction.guildId)
       const canManageAll = interaction.memberPermissions?.has(
         PermissionFlagsBits.ManageEvents,
       )
@@ -266,7 +354,7 @@ export default defineCommand({
       )
       if (schedules.length === 0) {
         await interaction.reply({
-          content: '目前沒有自訂重複活動。',
+          content: `目前沒有自訂重複活動。\n通知頻道：${notification ? `<#${notification.channelId}>` : '未設定'}`,
           flags: MessageFlags.Ephemeral,
         })
         return
@@ -278,7 +366,10 @@ export default defineCommand({
           return `• ${schedule.template.name}：每 ${schedule.interval} ${unitLabels[schedule.unit]}，下一個尚未建立的場次 <t:${timestamp}:F>`
         })
         .join('\n')
-      await interaction.reply({ content, flags: MessageFlags.Ephemeral })
+      await interaction.reply({
+        content: `${content}\n通知頻道：${notification ? `<#${notification.channelId}>` : '未設定'}`,
+        flags: MessageFlags.Ephemeral,
+      })
       return
     }
 
