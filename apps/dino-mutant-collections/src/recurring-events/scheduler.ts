@@ -45,7 +45,7 @@ async function runScheduler(client: Client): Promise<void> {
   }
 }
 
-export function startRecurringEventScheduler(client: Client): NodeJS.Timeout {
+export function startRecurringEventScheduler(client: Client): () => void {
   let running = false
   const check = async () => {
     if (running) return
@@ -67,5 +67,8 @@ export function startRecurringEventScheduler(client: Client): NodeJS.Timeout {
   cacheTimer.unref()
   const timer = setInterval(check, CHECK_INTERVAL_MS)
   timer.unref()
-  return timer
+  return () => {
+    clearInterval(cacheTimer)
+    clearInterval(timer)
+  }
 }

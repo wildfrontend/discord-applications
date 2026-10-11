@@ -1,5 +1,9 @@
 import { existsSync, readFileSync, renameSync } from 'node:fs'
-import { DatabaseSync } from 'node:sqlite'
+import {
+  configureDatabase,
+  createDatabase,
+  databaseDriver,
+} from '../database.js'
 import { dataFile } from './storage.js'
 import type { RecurrenceUnit, RecurringEventSchedule } from './types.js'
 
@@ -30,11 +34,8 @@ interface NotificationSettingsRow {
   updated_at: string
 }
 
-const database = new DatabaseSync(dataFile('recurring-events.sqlite'))
-database.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA busy_timeout = 5000;
-`)
+const database = createDatabase('recurring-events.sqlite')
+await configureDatabase(database)
 
 const createTableSql = `
   CREATE TABLE IF NOT EXISTS recurring_events (
@@ -51,104 +52,77 @@ const createTableSql = `
     next_start_at TEXT NOT NULL,
     template_json TEXT NOT NULL,
     UNIQUE (guild_id, source_event_id)
-  );
+  )
 `
 
-database.exec(createTableSql)
-database.exec(`
-  CREATE TABLE IF NOT EXISTS event_notification_settings (
-    guild_id TEXT PRIMARY KEY,
-    channel_id TEXT NOT NULL,
-    updated_by TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
-`)
+await database.batch(
+  [
+    createTableSql,
+    `CREATE TABLE IF NOT EXISTS event_notification_settings (
+      guild_id TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL,
+      updated_by TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+  ],
+  'write',
+)
 
-const schema = database
-  .prepare(
-    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'recurring_events'`,
-  )
-  .get() as { sql: string }
+const schemaResult = await database.execute(
+  `SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'recurring_events'`,
+)
+const schemaSql = schemaResult.rows[0]?.sql
 
-if (!schema.sql.includes("'seconds'")) {
-  try {
-    database.exec(`
-      BEGIN IMMEDIATE;
-      ALTER TABLE recurring_events RENAME TO recurring_events_previous;
-      ${createTableSql}
-      INSERT INTO recurring_events (
+if (typeof schemaSql === 'string' && !schemaSql.includes("'seconds'")) {
+  await database.batch(
+    [
+      'ALTER TABLE recurring_events RENAME TO recurring_events_previous',
+      createTableSql,
+      `INSERT INTO recurring_events (
         id, guild_id, source_event_id, latest_event_id, created_by,
         created_at, interval_value, unit, next_start_at, template_json
       )
       SELECT id, guild_id, source_event_id, latest_event_id, created_by,
              created_at, interval_value, unit, next_start_at, template_json
-      FROM recurring_events_previous;
-      DROP TABLE recurring_events_previous;
-      COMMIT;
-    `)
-  } catch (error) {
-    try {
-      database.exec('ROLLBACK')
-    } catch {
-      // SQLite may already have rolled back the transaction.
-    }
-    throw error
-  }
+      FROM recurring_events_previous`,
+      'DROP TABLE recurring_events_previous',
+    ],
+    'write',
+  )
 }
 
-database.exec('PRAGMA user_version = 2')
-
-const listAllStatement = database.prepare(`
+const listAllSql = `
   SELECT id, guild_id, source_event_id, latest_event_id, created_by,
          created_at, interval_value, unit, next_start_at, template_json
   FROM recurring_events
   ORDER BY created_at
-`)
-const listGuildStatement = database.prepare(`
+`
+const listGuildSql = `
   SELECT id, guild_id, source_event_id, latest_event_id, created_by,
          created_at, interval_value, unit, next_start_at, template_json
   FROM recurring_events
   WHERE guild_id = ?
   ORDER BY created_at
-`)
-const insertStatement = database.prepare(`
+`
+const insertSql = `
   INSERT INTO recurring_events (
     id, guild_id, source_event_id, latest_event_id, created_by,
     created_at, interval_value, unit, next_start_at, template_json
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`)
-const insertIfMissingStatement = database.prepare(`
+`
+const insertIfMissingSql = `
   INSERT OR IGNORE INTO recurring_events (
     id, guild_id, source_event_id, latest_event_id, created_by,
     created_at, interval_value, unit, next_start_at, template_json
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`)
-const updateStatement = database.prepare(`
+`
+const updateSql = `
   UPDATE recurring_events
   SET latest_event_id = ?, interval_value = ?, unit = ?, next_start_at = ?,
       template_json = ?
   WHERE id = ?
-`)
-const removeStatement = database.prepare(`
-  DELETE FROM recurring_events WHERE guild_id = ? AND id = ?
-`)
-const getNotificationSettingsStatement = database.prepare(`
-  SELECT guild_id, channel_id, updated_by, updated_at
-  FROM event_notification_settings
-  WHERE guild_id = ?
-`)
-const upsertNotificationSettingsStatement = database.prepare(`
-  INSERT INTO event_notification_settings (
-    guild_id, channel_id, updated_by, updated_at
-  ) VALUES (?, ?, ?, ?)
-  ON CONFLICT(guild_id) DO UPDATE SET
-    channel_id = excluded.channel_id,
-    updated_by = excluded.updated_by,
-    updated_at = excluded.updated_at
-`)
-const removeNotificationSettingsStatement = database.prepare(`
-  DELETE FROM event_notification_settings WHERE guild_id = ?
-`)
+`
 
 function toSchedule(row: ScheduleRow): RecurringEventSchedule {
   return {
@@ -182,7 +156,8 @@ function scheduleValues(schedule: RecurringEventSchedule) {
   ] as const
 }
 
-function migrateJsonStore(): void {
+async function migrateJsonStore(): Promise<void> {
+  if (databaseDriver !== 'sqlite') return
   const jsonFile = dataFile('recurring-events.json')
   if (!existsSync(jsonFile)) return
 
@@ -190,16 +165,13 @@ function migrateJsonStore(): void {
     const schedules = JSON.parse(
       readFileSync(jsonFile, 'utf8'),
     ) as RecurringEventSchedule[]
-    database.exec('BEGIN IMMEDIATE')
-    try {
-      for (const schedule of schedules) {
-        insertIfMissingStatement.run(...scheduleValues(schedule))
-      }
-      database.exec('COMMIT')
-    } catch (error) {
-      database.exec('ROLLBACK')
-      throw error
-    }
+    await database.batch(
+      schedules.map((schedule) => ({
+        sql: insertIfMissingSql,
+        args: [...scheduleValues(schedule)],
+      })),
+      'write',
+    )
     renameSync(jsonFile, dataFile('recurring-events.migrated.json'))
     console.log(`[events] Migrated ${schedules.length} schedule(s) to SQLite`)
   } catch (error) {
@@ -208,19 +180,22 @@ function migrateJsonStore(): void {
   }
 }
 
-migrateJsonStore()
+await migrateJsonStore()
 
 export const recurringEventStore = {
   async list(guildId?: string): Promise<RecurringEventSchedule[]> {
-    const rows = (guildId
-      ? listGuildStatement.all(guildId)
-      : listAllStatement.all()) as unknown as ScheduleRow[]
-    return rows.map(toSchedule)
+    const result = guildId
+      ? await database.execute({ sql: listGuildSql, args: [guildId] })
+      : await database.execute(listAllSql)
+    return (result.rows as unknown as ScheduleRow[]).map(toSchedule)
   },
 
   async add(schedule: RecurringEventSchedule): Promise<void> {
     try {
-      insertStatement.run(...scheduleValues(schedule))
+      await database.execute({
+        sql: insertSql,
+        args: [...scheduleValues(schedule)],
+      })
     } catch (error) {
       if (
         error instanceof Error &&
@@ -233,27 +208,37 @@ export const recurringEventStore = {
   },
 
   async update(schedule: RecurringEventSchedule): Promise<void> {
-    updateStatement.run(
-      schedule.latestEventId,
-      schedule.interval,
-      schedule.unit,
-      schedule.nextStartAt,
-      JSON.stringify(schedule.template),
-      schedule.id,
-    )
+    await database.execute({
+      sql: updateSql,
+      args: [
+        schedule.latestEventId,
+        schedule.interval,
+        schedule.unit,
+        schedule.nextStartAt,
+        JSON.stringify(schedule.template),
+        schedule.id,
+      ],
+    })
   },
 
   async remove(guildId: string, id: string): Promise<boolean> {
-    const result = removeStatement.run(guildId, id)
-    return Number(result.changes) > 0
+    const result = await database.execute({
+      sql: 'DELETE FROM recurring_events WHERE guild_id = ? AND id = ?',
+      args: [guildId, id],
+    })
+    return result.rowsAffected > 0
   },
 }
 
 export const eventNotificationStore = {
   async get(guildId: string): Promise<EventNotificationSettings | null> {
-    const row = getNotificationSettingsStatement.get(guildId) as
-      | NotificationSettingsRow
-      | undefined
+    const result = await database.execute({
+      sql: `SELECT guild_id, channel_id, updated_by, updated_at
+        FROM event_notification_settings
+        WHERE guild_id = ?`,
+      args: [guildId],
+    })
+    const row = result.rows[0] as unknown as NotificationSettingsRow | undefined
     return row
       ? {
           guildId: row.guild_id,
@@ -275,17 +260,29 @@ export const eventNotificationStore = {
       updatedBy,
       updatedAt: new Date().toISOString(),
     }
-    upsertNotificationSettingsStatement.run(
-      settings.guildId,
-      settings.channelId,
-      settings.updatedBy,
-      settings.updatedAt,
-    )
+    await database.execute({
+      sql: `INSERT INTO event_notification_settings (
+          guild_id, channel_id, updated_by, updated_at
+        ) VALUES (?, ?, ?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET
+          channel_id = excluded.channel_id,
+          updated_by = excluded.updated_by,
+          updated_at = excluded.updated_at`,
+      args: [
+        settings.guildId,
+        settings.channelId,
+        settings.updatedBy,
+        settings.updatedAt,
+      ],
+    })
     return settings
   },
 
   async remove(guildId: string): Promise<boolean> {
-    const result = removeNotificationSettingsStatement.run(guildId)
-    return Number(result.changes) > 0
+    const result = await database.execute({
+      sql: 'DELETE FROM event_notification_settings WHERE guild_id = ?',
+      args: [guildId],
+    })
+    return result.rowsAffected > 0
   },
 }

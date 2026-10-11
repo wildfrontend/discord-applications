@@ -57,7 +57,7 @@ pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（wat
 - `/event notify channel:#活動通知`：設定全伺服器共用的活動通知頻道；Bot 建立下一場循環活動時會發送時間與活動連結。
 - `/event notify-disable`：關閉活動頻道通知。
 
-第一版支援「其他地方」與一般語音頻道活動；Stage 活動需要更多頻道管理權限，暫不處理。bot 需要「建立活動」權限，一般成員只能管理自己建立的活動，具有「管理活動」權限者可以管理全部排程。排程使用 SQLite，預設保存在 `apps/dino-mutant-collections/data/`；舊版 JSON 資料會在啟動時自動遷移。部署 Docker 時請將持久化磁碟掛載到 `/app/data`，也可以用 `BOT_DATA_DIR` 指定其他位置。
+第一版支援「其他地方」與一般語音頻道活動；Stage 活動需要更多頻道管理權限，暫不處理。bot 需要「建立活動」權限，一般成員只能管理自己建立的活動，具有「管理活動」權限者可以管理全部排程。預設使用 SQLite，資料保存在 `apps/dino-mutant-collections/data/`；舊版 JSON 資料會在啟動時自動遷移。Docker Compose 會將資料保存在具名 volume，也可以用 `BOT_DATA_DIR` 指定其他位置。
 
 ## 多語言頻道翻譯
 
@@ -99,29 +99,68 @@ AI_PROVIDER_NAME=groq
 
 啟用前應告知伺服器成員訊息會送往第三方服務。`AI_API_KEY` 不可 commit 到 Git。金鑰必須與 `AI_BASE_URL` 的服務相符，模型名稱也必須是該服務可用的模型；目前不會自動切換備援服務。
 
-若使用 Docker Compose，根目錄設定只會啟動 Bot：
+## 4. Docker 自架
+
+根目錄的 `Dockerfile` 會產生只有 Bot 與正式依賴的映像；同一份映像可用在本機、NAS、VPS 或支援 Docker 的雲端平台。
+
+先建立並填好 `apps/dino-mutant-collections/.env`，再啟動：
 
 ```bash
 docker compose up -d --build
+docker compose logs -f bot
 ```
 
-SQLite 資料使用 Docker volume 保存。
+Compose 預設使用 SQLite，並將 `/app/data` 掛載到 `bot-data` volume。更新版本不會清除資料：
 
-## 4. 部署（24 小時上線）
+```bash
+git pull --ff-only
+docker compose up -d --build
+```
 
-Bot 要持續執行才會回應，正式上線需要放到主機上。根目錄的 `Dockerfile` 可部署到任何支援 Docker 的平台（Railway、Fly.io、Render、VPS 等）：
+健康檢查位於 `http://127.0.0.1:10000/healthz`。停止服務使用 `docker compose down`；除非確定要刪除 Bot 資料，請勿加上 `--volumes`。
+
+若不使用 Compose，也可以直接執行映像：
 
 ```bash
 docker build --build-arg APP=dino-mutant-collections -t dino-mutant-collections .
 docker run -d --restart unless-stopped \
-  -e DISCORD_TOKEN=... -e DISCORD_CLIENT_ID=... \
+  --env-file apps/dino-mutant-collections/.env \
+  -e BOT_DATA_DIR=/app/data -e PORT=10000 \
+  -v dino-bot-data:/app/data \
   dino-mutant-collections
 ```
 
 - 容器啟動時會先同步 slash commands，再啟動 bot。
 - 正式環境**不要**設 `DISCORD_GUILD_ID`，指令才會註冊為全域、在所有伺服器可用。
 - 在雲端平台上，環境變數請用平台的 secrets / variables 設定。
-- Gateway bot 請維持單一 replica；若需要水平擴充，必須先導入 Discord sharding 與分散式排程鎖。
+- Gateway bot 請維持單一 replica。遠端資料庫模式有租約鎖，可避免平台換版時新舊容器短暫重疊，但這不是 Discord sharding，不能用來水平擴充。
+
+## 5. 部署到 Render
+
+根目錄的 `render.yaml` 是可直接使用的 Blueprint。建立 Render Web Service 或 Blueprint、連接此 GitHub repository 後，Render 會使用 `Dockerfile` 建置。
+
+Render 免費 Web Service 的檔案系統是暫時性的，因此不能把 SQLite 放在容器內。先建立任一個 libSQL 相容的遠端資料庫，再於 Render 填入：
+
+```env
+DATABASE_DRIVER=libsql
+DATABASE_URL=libsql://...
+DATABASE_AUTH_TOKEN=...
+DISCORD_CLIENT_ID=...
+DISCORD_TOKEN=...
+AI_API_KEY=...
+```
+
+其他 AI 參數已放在 Blueprint 中，仍可在 Render Dashboard 修改。若需要頻道自動翻譯，另將 `TRANSLATION_AUTO_ENABLED` 改成 `true`，並在 Discord Developer Portal 打開 Message Content Intent。正式環境通常不設定 `DISCORD_GUILD_ID`。
+
+Render 會自動提供 `PORT`，Bot 會監聽 `0.0.0.0:$PORT` 並提供 `/healthz`。免費 Web Service 在沒有外部 HTTP 請求一段時間後會休眠；Discord Gateway 連線本身不算網站流量，所以免費方案適合測試，不保證 Bot 24 小時在線。正式長期使用建議改用付費 Background Worker、具持久化磁碟的服務，或自行架設的 VPS。
+
+資料庫模式可透過環境變數切換：
+
+| 場景 | `DATABASE_DRIVER` | 持久化方式 |
+| --- | --- | --- |
+| 本機／Docker Compose／VPS | `sqlite` | 掛載 `/app/data` volume |
+| Render 免費方案 | `libsql` | 外部 libSQL 相容資料庫 |
+| Render 付費且有 Persistent Disk | `sqlite` | 將磁碟掛載到 `/app/data` |
 
 ## 常用指令
 
@@ -141,7 +180,7 @@ Bot 啟動後，可在另一個終端開啟本機後台：
 pnpm dev:panel
 ```
 
-瀏覽器開啟 `http://127.0.0.1:4310`，可以管理 Bot 的 `.env`、查看程序、活動排程、翻譯群組與個人語言偏好，並執行單項重設。Token 與 API Key 只會顯示是否已設定，面板不會把明文回傳到瀏覽器；儲存設定後需重啟 Bot 才會生效。面板只監聽本機 loopback，不應部署到公開網路。預設讀取 `apps/dino-mutant-collections/data/`，若 Bot 使用自訂資料目錄，請為面板設定相同的 `BOT_DATA_DIR`。
+瀏覽器開啟 `http://127.0.0.1:4310`，可以管理 Bot 的 `.env`、查看程序、活動排程、翻譯群組與個人語言偏好，並執行單項重設。Token 與 API Key 只會顯示是否已設定，面板不會把明文回傳到瀏覽器；儲存設定後需重啟 Bot 才會生效。面板只監聽本機 loopback，不應部署到公開網路。資料檢視與重設目前只支援本機 SQLite；使用遠端 libSQL 時請透過資料庫供應商的 Dashboard 管理。
 
 ## 新增一個 application
 

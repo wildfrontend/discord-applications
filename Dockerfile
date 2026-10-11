@@ -15,6 +15,8 @@ FROM node:24-slim
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --chown=node:node --from=build /out .
+RUN mkdir -p /app/data && chown node:node /app/data
 USER node
+EXPOSE 10000
 # 每次啟動先同步 slash commands（失敗不影響 bot 上線），再啟動 bot
 CMD ["sh", "-c", "node dist/deploy-commands.js; exec node dist/index.js"]
