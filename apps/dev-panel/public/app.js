@@ -197,7 +197,9 @@ function render(data) {
 
   elements.botStatus.className = `status-pill ${data.bot?.running ? 'is-online' : 'is-offline'}`
   elements.botStatus.textContent = data.bot?.running
-    ? `Bot 運行中 · PID ${data.bot.pid}`
+    ? data.bot.source === 'health'
+      ? 'Bot 運行中 · Docker'
+      : `Bot 運行中 · PID ${data.bot.pid}`
     : 'Bot 未運行'
 
   renderSchedules(data.schedules)

@@ -47,5 +47,40 @@ services:
       - node
       - dist/setup.js
 
+  dev-panel:
+    image: dc-dev-panel:local
+    build:
+      context: .
+      args:
+        APP: dev-panel
+    profiles:
+      - tools
+    init: true
+    restart: unless-stopped
+    command:
+      - node
+      - dist/server.js
+    environment:
+      BOT_DATA_DIR: /app/data
+      BOT_ENV_FILE: /config/.env
+      BOT_HEALTH_URL: http://bot:10000/healthz
+      DEV_PANEL_HOST: 0.0.0.0
+      DEV_PANEL_PORT: 4310
+    ports:
+      - 127.0.0.1:4310:4310
+    volumes:
+      - bot-data:/app/data
+      - ./apps/dino-mutant-collections:/config
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:4310/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 volumes:
   bot-data:

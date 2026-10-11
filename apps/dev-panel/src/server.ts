@@ -30,7 +30,8 @@ const botEnvironmentFile = resolve(
 )
 const dataDirectory = resolve(process.env.BOT_DATA_DIR || defaultDataDirectory)
 const port = Number(process.env.DEV_PANEL_PORT || 4310)
-const host = '127.0.0.1'
+const host = process.env.DEV_PANEL_HOST?.trim() || '127.0.0.1'
+const botHealthUrl = process.env.BOT_HEALTH_URL?.trim()
 const startedAt = new Date().toISOString()
 
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
@@ -324,7 +325,26 @@ function botProcessStatus() {
   return locks.find((lock) => lock.running) ?? locks[0] ?? null
 }
 
-function dashboardData() {
+async function currentBotStatus() {
+  if (!botHealthUrl) return botProcessStatus()
+  try {
+    const response = await fetch(botHealthUrl, {
+      signal: AbortSignal.timeout(3_000),
+    })
+    const body = (await response.json().catch(() => null)) as {
+      status?: unknown
+    } | null
+    return {
+      running: response.ok && body?.status === 'ready',
+      source: 'health',
+      status: typeof body?.status === 'string' ? body.status : null,
+    }
+  } catch {
+    return { running: false, source: 'health', status: null }
+  }
+}
+
+async function dashboardData() {
   const schedules = readRows(
     recurringDatabaseFile,
     'recurring_events',
@@ -415,7 +435,7 @@ function dashboardData() {
 
   return {
     panel: { startedAt, now: new Date().toISOString(), dataDirectory },
-    bot: botProcessStatus(),
+    bot: await currentBotStatus(),
     databases: {
       recurringEvents: {
         exists: existsSync(recurringDatabaseFile),
@@ -454,6 +474,7 @@ function mutationIsAllowed(request: IncomingMessage): boolean {
   const origin = request.headers.origin
   const allowedOrigins = new Set([
     `http://${host}:${port}`,
+    `http://127.0.0.1:${port}`,
     `http://localhost:${port}`,
   ])
   return (
@@ -546,7 +567,7 @@ const server = createServer(async (request, response) => {
 
   try {
     if (request.method === 'GET' && url.pathname === '/api/dashboard') {
-      sendJson(response, 200, dashboardData())
+      sendJson(response, 200, await dashboardData())
       return
     }
 
