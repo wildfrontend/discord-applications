@@ -34,6 +34,13 @@ export default defineCommand({
         .setDescription('將同一分類中的多個語言頻道設為同步翻譯群組')
         .addChannelOption((option) =>
           option
+            .setName('category')
+            .setDescription('要設定多語言同步的分類')
+            .addChannelTypes(ChannelType.GuildCategory)
+            .setRequired(true),
+        )
+        .addChannelOption((option) =>
+          option
             .setName('chinese-channel')
             .setDescription('繁體中文頻道')
             .addChannelTypes(ChannelType.GuildText),
@@ -187,6 +194,18 @@ export default defineCommand({
     }
 
     if (subcommand === 'group') {
+      const category = interaction.options.getChannel('category', true)
+      if (
+        category.type !== ChannelType.GuildCategory ||
+        category.guildId !== interaction.guildId
+      ) {
+        await interaction.reply({
+          content: '請選擇這個伺服器內的分類。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+
       const requestedChannels = [
         {
           language: 'zt' as const,
@@ -240,15 +259,13 @@ export default defineCommand({
         return
       }
 
-      const categoryId = selectedChannels[0]?.channel.parentId
       if (
-        !categoryId ||
         selectedChannels.some(
-          (entry) => entry.channel.parentId !== categoryId,
+          (entry) => entry.channel.parentId !== category.id,
         )
       ) {
         await interaction.reply({
-          content: '所有語言頻道必須放在同一個 Discord 分類中。',
+          content: `所有語言頻道都必須位於「${category.name}」分類中。`,
           flags: MessageFlags.Ephemeral,
         })
         return
@@ -276,7 +293,7 @@ export default defineCommand({
 
       const members = await translationGroupStore.replace(
         interaction.guildId,
-        categoryId,
+        category.id,
         selectedChannels.map((entry) => ({
           channelId: entry.channel.id,
           language: entry.language,
@@ -293,7 +310,7 @@ export default defineCommand({
       )
       const automatic = process.env.TRANSLATION_AUTO_ENABLED === 'true'
       await interaction.reply({
-        content: `已建立多語言同步群組：\n${members
+        content: `已建立「${category.name}」多語言同步群組：\n${members
           .map(
             (member) =>
               `• <#${member.channelId}>：**${languageNames[member.language]}**`,
