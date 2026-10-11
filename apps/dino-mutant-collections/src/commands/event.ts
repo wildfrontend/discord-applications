@@ -49,7 +49,7 @@ export default defineCommand({
         .addIntegerOption((option) =>
           option
             .setName('every')
-            .setDescription('每隔多少單位重複')
+            .setDescription('每隔多少單位重複（分鐘最少 15）')
             .setRequired(true)
             .setMinValue(1)
             .setMaxValue(365),
@@ -60,8 +60,7 @@ export default defineCommand({
             .setDescription('重複單位')
             .setRequired(true)
             .addChoices(
-              { name: '秒（測試用，最少 10 秒）', value: 'seconds' },
-              { name: '分鐘', value: 'minutes' },
+              { name: '分鐘（最少 15 分鐘）', value: 'minutes' },
               { name: '小時', value: 'hours' },
               { name: '天', value: 'days' },
               { name: '週', value: 'weeks' },
@@ -184,15 +183,15 @@ export default defineCommand({
       const interval = interaction.options.getInteger('every', true)
       const unit = interaction.options.getString('unit', true) as RecurrenceUnit
 
-      if (unit === 'seconds' && interval < 10) {
+      if (unit === 'seconds') {
         await interaction.editReply(
-          '秒級排程最少為 10 秒，避免觸發 Discord API 限制。',
+          '秒級排程已停用，請重新執行指令並選擇分鐘以上的單位。',
         )
         return
       }
-      if (unit === 'seconds' && process.env.NODE_ENV === 'production') {
+      if (unit === 'minutes' && interval < 15) {
         await interaction.editReply(
-          '秒級排程僅供本機開發測試，正式環境請使用分鐘以上。',
+          'Discord 活動的分鐘週期最少為 15 分鐘，請將 every 設為 15 以上。',
         )
         return
       }
@@ -249,10 +248,8 @@ export default defineCommand({
         unit,
       )
       const nextTimestamp = Math.floor(Date.parse(schedule.nextStartAt) / 1000)
-      const testReminder =
-        unit === 'seconds' ? ' 測試完成後請用 `/event remove` 停止排程。' : ''
       await interaction.editReply(
-        `已替「${event.name}」設定每 ${interval} ${unitLabels[unit]}重複。下一場活動已建立；再下一場的時間是 <t:${nextTimestamp}:F>。${testReminder}`,
+        `已替「${event.name}」設定每 ${interval} ${unitLabels[unit]}重複。下一場活動已建立；再下一場的時間是 <t:${nextTimestamp}:F>。`,
       )
       return
     }
