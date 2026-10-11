@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Dino Dev Panel</title>
+    <link rel="stylesheet" href="/app.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">DINO MUTANT COLLECTIONS</p>
+          <h1>開發控制台</h1>
+          <p class="subtitle">查看 Bot 本機狀態、排程與翻譯資料。</p>
+        </div>
+        <div class="topbar-actions">
+          <div id="bot-status" class="status-pill is-loading">讀取中</div>
+          <button id="refresh-button" class="button button-secondary" type="button">
+            重新整理
+          </button>
+        </div>
+      </header>
+
+      <div id="error-banner" class="error-banner" role="alert" hidden></div>
+
+      <main>
+        <section class="summary-grid" aria-label="資料摘要">
+          <article class="summary-card accent-violet">
+            <span>活動排程</span>
+            <strong id="schedule-count">—</strong>
+            <small>自訂循環規則</small>
+          </article>
+          <article class="summary-card accent-cyan">
+            <span>翻譯群組</span>
+            <strong id="group-count">—</strong>
+            <small>依 Discord 分類區隔</small>
+          </article>
+          <article class="summary-card accent-amber">
+            <span>個人偏好</span>
+            <strong id="preference-count">—</strong>
+            <small>右鍵預設翻譯語言</small>
+          </article>
+          <article class="summary-card accent-green">
+            <span>資料目錄</span>
+            <strong id="database-size">—</strong>
+            <small id="data-directory">讀取中</small>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">EVENTS</p>
+              <h2>活動排程</h2>
+              <p>刪除排程不會刪除已經建立在 Discord 的活動。</p>
+            </div>
+            <button
+              class="button button-danger-outline"
+              data-reset="recurring"
+              type="button"
+            >
+              清除全部排程
+            </button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>活動</th>
+                  <th>頻率</th>
+                  <th>下一次</th>
+                  <th>建立者</th>
+                  <th><span class="sr-only">操作</span></th>
+                </tr>
+              </thead>
+              <tbody id="schedule-table"></tbody>
+            </table>
+            <div id="schedule-empty" class="empty-state" hidden>目前沒有自訂活動排程。</div>
+          </div>
+        </section>
+
+        <div class="content-grid">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-kicker">TRANSLATION</p>
+                <h2>翻譯群組</h2>
+                <p id="translation-meta">讀取頻道關聯中。</p>
+              </div>
+            </div>
+            <div id="group-list" class="card-list"></div>
+            <div id="group-empty" class="empty-state" hidden>目前沒有分類翻譯群組。</div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-kicker">PREFERENCES</p>
+                <h2>個人翻譯語言</h2>
+                <p>使用者透過 <code>/translate config</code> 儲存的設定。</p>
+              </div>
+              <button
+                class="button button-danger-outline"
+                data-reset="preferences"
+                type="button"
+              >
+                全部重設
+              </button>
+            </div>
+            <div id="preference-list" class="card-list compact"></div>
+            <div id="preference-empty" class="empty-state" hidden>目前沒有個人語言設定。</div>
+          </section>
+        </div>
+
+        <section class="panel danger-zone">
+          <div>
+            <p class="section-kicker">DANGER ZONE</p>
+            <h2>重設全部翻譯資料</h2>
+            <p>清除分類群組、雙向頻道連結、舊版綁定與個人偏好。此操作無法復原。</p>
+          </div>
+          <button
+            class="button button-danger"
+            data-reset="translations"
+            type="button"
+          >
+            重設翻譯資料
+          </button>
+        </section>
+      </main>
+
+      <footer>
+        <span>僅監聽 127.0.0.1</span>
+        <span id="last-updated">尚未同步</span>
+      </footer>
+    </div>
+  </body>
+</html>
