@@ -95,9 +95,11 @@ AI_API_KEY=...
 AI_MODEL=qwen/qwen3.8-27b
 AI_BASE_URL=https://api.groq.com/openai/v1
 AI_PROVIDER_NAME=groq
+# Groq on-demand 方案的單次輸出上限較低；一般 Discord 訊息使用 900 即可
+AI_MAX_OUTPUT_TOKENS=900
 ```
 
-啟用前應告知伺服器成員訊息會送往第三方服務。`AI_API_KEY` 不可 commit 到 Git。金鑰必須與 `AI_BASE_URL` 的服務相符，模型名稱也必須是該服務可用的模型；目前不會自動切換備援服務。
+啟用前應告知伺服器成員訊息會送往第三方服務。`AI_API_KEY` 不可 commit 到 Git。金鑰必須與 `AI_BASE_URL` 的服務相符，模型名稱也必須是該服務可用的模型；目前不會自動切換備援服務。自動翻譯會在目標頻道使用 Webhook 顯示原發言者的暱稱與頭像，因此 Bot 另需要「管理 Webhook」權限。
 
 ## 4. Docker 自架
 

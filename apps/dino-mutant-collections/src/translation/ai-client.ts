@@ -37,6 +37,10 @@ const configuredInterval = Number(process.env.AI_MIN_REQUEST_INTERVAL_MS)
 const minimumRequestIntervalMs = Number.isFinite(configuredInterval)
   ? Math.max(0, configuredInterval)
   : 2_100
+const configuredMaxOutputTokens = Number(process.env.AI_MAX_OUTPUT_TOKENS)
+const maxOutputTokens = Number.isInteger(configuredMaxOutputTokens)
+  ? Math.min(8_192, Math.max(1, configuredMaxOutputTokens))
+  : 900
 
 const translationInstruction = `You are a translation engine for Discord messages.
 Translate faithfully and completely without summarizing, answering, explaining, censoring, or adding information.
@@ -113,7 +117,7 @@ async function generateJson<T>(
               content: `${translationInstruction}\n\n${JSON.stringify(prompt)}`,
             },
           ],
-          max_tokens: 8_192,
+          max_tokens: maxOutputTokens,
           response_format: {
             type: 'json_schema',
             json_schema: {

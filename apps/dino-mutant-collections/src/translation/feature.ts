@@ -1,10 +1,12 @@
 import {
+  ChannelType,
   type Client,
   Events,
   escapeMarkdown,
   type Message,
   MessageFlags,
   type TextBasedChannel,
+  type Webhook,
 } from 'discord.js'
 import { aiTranslationClient } from './ai-client.js'
 import {
@@ -24,6 +26,9 @@ import { translationChannelLinkStore, translationGroupStore } from './store.js'
 interface TranslationFeatureOptions {
   automatic: boolean
 }
+
+const translationWebhookName = 'Dino 翻譯'
+const translationWebhooks = new Map<string, Promise<Webhook>>()
 
 async function fetchSourceMessage(
   client: Client,
@@ -56,22 +61,65 @@ async function sendTranslatedText(
   translatedText: string,
 ): Promise<void> {
   const targetChannel = await message.guild.channels.fetch(targetChannelId)
-  if (!targetChannel?.isSendable()) {
+  if (targetChannel?.type !== ChannelType.GuildText) {
     throw new Error(`目標頻道 ${targetChannelId} 不存在或 Bot 無法傳送訊息。`)
   }
-  const author = escapeMarkdown(
-    message.member?.displayName ?? message.author.displayName,
-  )
-  const header = `**${author}**｜[查看原訊息](${message.url})\n`
-  const available = 2000 - header.length
+  const sourceLink = `\n-# [查看原訊息](${message.url})`
+  const available = 2000 - sourceLink.length
   const content =
     translatedText.length <= available
       ? translatedText
       : `${translatedText.slice(0, Math.max(0, available - 1))}…`
-  await targetChannel.send({
-    content: `${header}${content}`,
-    allowedMentions: { parse: [], repliedUser: false },
-  })
+  const webhookPromise = translationWebhooks.get(targetChannelId)
+  const createOrFindWebhook =
+    webhookPromise ??
+    (async () => {
+      const webhooks = await targetChannel.fetchWebhooks()
+      const existing = webhooks.find(
+        (webhook) =>
+          webhook.isIncoming() &&
+          webhook.owner?.id === message.client.user.id &&
+          webhook.name === translationWebhookName,
+      )
+      return (
+        existing ??
+        (await targetChannel.createWebhook({
+          name: translationWebhookName,
+          reason: '以原發言者的暱稱與頭像顯示自動翻譯',
+        }))
+      )
+    })()
+
+  if (!webhookPromise)
+    translationWebhooks.set(targetChannelId, createOrFindWebhook)
+
+  try {
+    const webhook = await createOrFindWebhook
+    const username = (
+      message.member?.displayName ?? message.author.displayName
+    ).slice(0, 80)
+    const avatarURL =
+      message.member?.displayAvatarURL({ extension: 'png', size: 128 }) ??
+      message.author.displayAvatarURL({ extension: 'png', size: 128 })
+    await webhook.send({
+      content: `${content}${sourceLink}`,
+      username,
+      avatarURL,
+      allowedMentions: { parse: [], repliedUser: false },
+    })
+  } catch (error) {
+    translationWebhooks.delete(targetChannelId)
+    const author = escapeMarkdown(
+      message.member?.displayName ?? message.author.displayName,
+    )
+    console.warn(
+      `[translate] Webhook delivery unavailable in channel ${targetChannelId}; falling back to bot message: ${safeErrorMessage(error)}`,
+    )
+    await targetChannel.send({
+      content: `**${author}**｜[查看原訊息](${message.url})\n${content}`,
+      allowedMentions: { parse: [], repliedUser: false },
+    })
+  }
 }
 
 export function startTranslationFeature(
