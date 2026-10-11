@@ -12,7 +12,10 @@ const applicationId = (process.env.DISCORD_CLIENT_ID || 'default').replace(
   /[^a-zA-Z0-9_-]/g,
   '_',
 )
-const lockFile = join(tmpdir(), `dc-example-bot-${applicationId}.lock`)
+const lockFile = join(
+  tmpdir(),
+  `dc-dino-mutant-collections-${applicationId}.lock`,
+)
 
 interface LockOwner {
   pid: number

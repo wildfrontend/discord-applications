@@ -3,10 +3,10 @@ services:
     build:
       context: .
       args:
-        APP: example-bot
+        APP: dino-mutant-collections
     restart: unless-stopped
     env_file:
-      - apps/example-bot/.env
+      - apps/dino-mutant-collections/.env
     environment:
       BOT_DATA_DIR: /app/data
     volumes:
