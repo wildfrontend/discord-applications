@@ -217,6 +217,12 @@ Bot 啟動後，可在另一個終端開啟本機後台：
 pnpm dev:panel
 ```
 
+若 Bot 使用 Docker Compose 運行，請改用共用同一個 SQLite volume 的後台服務：
+
+```bash
+docker compose --profile tools up -d --build dev-panel
+```
+
 瀏覽器開啟 `http://127.0.0.1:4310`，可以管理 Bot 的 `.env`、查看程序、活動排程、翻譯群組與個人語言偏好，並執行單項重設。Token 與 API Key 只會顯示是否已設定，面板不會把明文回傳到瀏覽器；儲存設定後需重啟 Bot 才會生效。面板只監聽本機 loopback，不應部署到公開網路。資料檢視與重設目前只支援本機 SQLite；使用遠端 libSQL 時請透過資料庫供應商的 Dashboard 管理。
 
 ## 新增一個 application
