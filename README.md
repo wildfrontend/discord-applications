@@ -61,7 +61,7 @@ pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（wat
 
 ## 多語言頻道翻譯
 
-內建繁體中文、英文、日文與韓文，使用 Groq 上的 Qwen 模型提供長句與口語翻譯，Render 等記憶體有限的環境不需要載入本機模型。
+內建繁體中文、英文、日文與韓文，可連接採用 OpenAI 相容 API 的雲端模型提供長句與口語翻譯，Render 等記憶體有限的環境不需要載入本機模型。預設範例使用 Groq 上的 Qwen 模型。
 
 將各語言文字頻道放在同一個 Discord 分類後，由頻道管理員建立同步群組：
 
@@ -73,7 +73,7 @@ pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（wat
 
 至少選擇兩個頻道。群組中任何一個頻道有人發言時，bot 會翻譯並同步到其他語言頻道。也可以用 `/translate link` 保留只有兩個頻道的簡單雙向配對。
 
-多語言群組會在同一次 Groq 請求中產生所有目標語言；例如中文同步到英、日、韓仍只計為 1 次 API 請求。預設會將請求間隔至少 2.1 秒，以符合免費方案的 RPM 限制；可用 `GROQ_MIN_REQUEST_INTERVAL_MS` 調整。
+多語言群組會在同一次 AI 請求中產生所有目標語言；例如中文同步到英、日、韓仍只計為 1 次 API 請求。預設會將請求間隔至少 2.1 秒；可依供應商限制用 `AI_MIN_REQUEST_INTERVAL_MS` 調整。
 
 任何訊息也可以使用 **右鍵 → Apps → 翻譯這則訊息**：
 
@@ -88,14 +88,16 @@ pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（wat
 1. 到 Discord Developer Portal → application → **Bot**。
 2. 開啟 **MESSAGE CONTENT INTENT**。
 3. 在 `.env` 設定 `TRANSLATION_AUTO_ENABLED=true`。
-4. 到 Groq Console 建立免費 API 金鑰後設定：
+4. 設定任一 OpenAI 相容 AI 服務的金鑰、模型及 API base URL。以下為 Groq 範例：
 
 ```env
-GROQ_API_KEY=...
-GROQ_MODEL=qwen/qwen3.8-27b
+AI_API_KEY=...
+AI_MODEL=qwen/qwen3.8-27b
+AI_BASE_URL=https://api.groq.com/openai/v1
+AI_PROVIDER_NAME=groq
 ```
 
-啟用前應告知伺服器成員訊息會送往第三方服務。`GROQ_API_KEY` 不可 commit 到 Git。此設定不會以 Gemini 作為備援；Groq 失敗或額度用完時只會記錄錯誤。
+啟用前應告知伺服器成員訊息會送往第三方服務。`AI_API_KEY` 不可 commit 到 Git。金鑰必須與 `AI_BASE_URL` 的服務相符，模型名稱也必須是該服務可用的模型；目前不會自動切換備援服務。
 
 若使用 Docker Compose，根目錄設定只會啟動 Bot：
 
@@ -139,7 +141,7 @@ Bot 啟動後，可在另一個終端開啟本機後台：
 pnpm dev:panel
 ```
 
-瀏覽器開啟 `http://127.0.0.1:4310`，可以查看 Bot 程序、活動排程、翻譯群組與個人語言偏好，並執行單項重設。面板只監聽本機 loopback，不應部署到公開網路。預設讀取 `apps/dino-mutant-collections/data/`，若 Bot 使用自訂資料目錄，請為面板設定相同的 `BOT_DATA_DIR`。
+瀏覽器開啟 `http://127.0.0.1:4310`，可以管理 Bot 的 `.env`、查看程序、活動排程、翻譯群組與個人語言偏好，並執行單項重設。Token 與 API Key 只會顯示是否已設定，面板不會把明文回傳到瀏覽器；儲存設定後需重啟 Bot 才會生效。面板只監聽本機 loopback，不應部署到公開網路。預設讀取 `apps/dino-mutant-collections/data/`，若 Bot 使用自訂資料目錄，請為面板設定相同的 `BOT_DATA_DIR`。
 
 ## 新增一個 application
 

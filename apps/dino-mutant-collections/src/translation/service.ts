@@ -1,4 +1,4 @@
-import { groqTranslationClient as translationClient } from './groq-client.js'
+import { aiTranslationClient as translationClient } from './ai-client.js'
 import { languageNames, type TranslationLanguage } from './languages.js'
 import type { TranslationBinding } from './store.js'
 
@@ -108,20 +108,25 @@ export async function translateToLanguages(
 ): Promise<CompletedTranslation[]> {
   const source = await detectMessageLanguage(text)
   const uniqueTargets = [...new Set(targets)]
-  const targetsToTranslate = uniqueTargets.filter(
-    (target) => target !== source,
-  )
+  const targetsToTranslate = uniqueTargets.filter((target) => target !== source)
   const result = await translationClient.translateMany(
     text,
     targetsToTranslate,
     source ?? 'auto',
   )
 
-  return uniqueTargets.map((target) => ({
-    source: source ?? result.detectedLanguage,
-    target,
-    text: target === source ? text : result.translations[target]!,
-  }))
+  return uniqueTargets.map((target) => {
+    const translatedText =
+      target === source ? text : result.translations[target]
+    if (translatedText === undefined) {
+      throw new Error(`缺少${languageNames[target]}翻譯結果。`)
+    }
+    return {
+      source: source ?? result.detectedLanguage,
+      target,
+      text: translatedText,
+    }
+  })
 }
 
 export function shouldTranslateMessage(text: string): boolean {

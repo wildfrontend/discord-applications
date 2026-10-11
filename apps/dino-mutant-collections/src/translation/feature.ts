@@ -6,12 +6,12 @@ import {
   MessageFlags,
   type TextBasedChannel,
 } from 'discord.js'
+import { aiTranslationClient } from './ai-client.js'
 import {
   originalButtonPrefix,
   parseSourceIds,
   targetSelectPrefix,
 } from './components.js'
-import { groqTranslationClient } from './groq-client.js'
 import { isTranslationLanguage, languageNames } from './languages.js'
 import {
   shouldTranslateMessage,
@@ -80,9 +80,9 @@ export function startTranslationFeature(
 ): void {
   let lastAutomaticErrorAt = 0
 
-  if (!process.env.GROQ_API_KEY?.trim()) {
+  if (!process.env.AI_API_KEY?.trim()) {
     console.warn(
-      '[translate] GROQ_API_KEY is missing; translation requests will fail until it is configured and the bot is restarted.',
+      '[translate] AI_API_KEY is missing; translation requests will fail until it is configured and the bot is restarted.',
     )
   }
 
@@ -247,6 +247,6 @@ export function startTranslationFeature(
   })
 
   console.log(
-    `[translate] Feature ready (automatic=${automatic ? 'enabled' : 'disabled'}, provider=${groqTranslationClient.name}, languages=${Object.values(languageNames).join(', ')})`,
+    `[translate] Feature ready (automatic=${automatic ? 'enabled' : 'disabled'}, provider=${aiTranslationClient.name}, languages=${Object.values(languageNames).join(', ')})`,
   )
 }
