@@ -97,7 +97,17 @@ export default defineCommand({
         await interaction.respond([])
         return
       }
-      const events = guild.scheduledEvents.cache
+      const events = await guild.scheduledEvents.fetch().catch((error) => {
+        const details = error instanceof Error ? error.message : String(error)
+        console.error(
+          `[events] Failed to fetch scheduled events for autocomplete in guild ${interaction.guildId}: ${details}`,
+        )
+        return null
+      })
+      if (!events) {
+        await interaction.respond([])
+        return
+      }
       const canManageAll = interaction.memberPermissions?.has(
         PermissionFlagsBits.ManageEvents,
       )
