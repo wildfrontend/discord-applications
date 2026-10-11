@@ -14,7 +14,10 @@ import {
   translationBindingStore,
   translationChannelLinkStore,
   translationGroupStore,
+  translationPreferenceStore,
 } from '../translation/store.js'
+
+const askEveryTimeValue = 'ask'
 
 function bindingLabel(languageA: string, languageB: string): string {
   if (!isTranslationLanguage(languageA) || !isTranslationLanguage(languageB)) {
@@ -28,6 +31,21 @@ export default defineCommand({
     .setName('translate')
     .setDescription('設定多語言頻道之間的自動翻譯')
     .setDMPermission(false)
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('config')
+        .setDescription('設定右鍵手動翻譯的個人目標語言')
+        .addStringOption((option) =>
+          option
+            .setName('language')
+            .setDescription('預設翻譯語言；也可以恢復為每次手動選擇')
+            .setRequired(true)
+            .addChoices(...languageChoices, {
+              name: '每次手動選擇',
+              value: askEveryTimeValue,
+            }),
+        ),
+    )
     .addSubcommand((subcommand) =>
       subcommand
         .setName('group')
@@ -94,9 +112,7 @@ export default defineCommand({
       subcommand.setName('status').setDescription('查看目前頻道的語言綁定'),
     )
     .addSubcommand((subcommand) =>
-      subcommand
-        .setName('unlink')
-        .setDescription('移除目前頻道的雙向翻譯連結'),
+      subcommand.setName('unlink').setDescription('移除目前頻道的雙向翻譯連結'),
     )
     .addSubcommand((subcommand) =>
       subcommand
@@ -115,7 +131,35 @@ export default defineCommand({
     }
 
     const subcommand = interaction.options.getSubcommand()
+    if (subcommand === 'config') {
+      const language = interaction.options.getString('language', true)
+      if (language === askEveryTimeValue) {
+        await translationPreferenceStore.remove(interaction.user.id)
+        await interaction.reply({
+          content: '已改為每次手動選擇翻譯語言。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+      if (!isTranslationLanguage(language)) {
+        await interaction.reply({
+          content: '不支援選擇的語言。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+      await translationPreferenceStore.set(interaction.user.id, language)
+      await interaction.reply({
+        content: `個人翻譯語言已設定為 **${languageNames[language]}**；之後右鍵翻譯會直接使用這個語言。`,
+        flags: MessageFlags.Ephemeral,
+      })
+      return
+    }
+
     if (subcommand === 'status') {
+      const preference = await translationPreferenceStore.get(
+        interaction.user.id,
+      )
       const groupMember = await translationGroupStore.getMember(
         interaction.channelId,
       )
@@ -145,20 +189,23 @@ export default defineCommand({
           ? link.channelBId
           : link.channelAId
         : null
+      const channelStatus = groupMember
+        ? `這個分類已設定多語言同步：\n${groupMembers
+            .map(
+              (member) =>
+                `• <#${member.channelId}>：**${languageNames[member.language]}**`,
+            )
+            .join('\n')}\n自動翻譯目前${automatic ? '已啟用' : '尚未啟用'}。`
+        : link && currentLanguage && linkedLanguage && linkedChannelId
+          ? `這個頻道使用 **${languageNames[currentLanguage]}**，已和 <#${linkedChannelId}>（**${languageNames[linkedLanguage]}**）雙向連結。自動翻譯目前${automatic ? '已啟用' : '尚未啟用'}。`
+          : legacyBinding
+            ? `這個頻道仍有舊版 **${bindingLabel(legacyBinding.languageA, legacyBinding.languageB)}** 設定，可使用右鍵翻譯；尚未連結另一個頻道。`
+            : '這個頻道尚未設定雙向翻譯連結。'
+      const preferenceStatus = preference
+        ? `你的右鍵翻譯預設為 **${languageNames[preference.language]}**。`
+        : '你的右鍵翻譯目前會每次詢問目標語言。'
       await interaction.reply({
-        content:
-          groupMember
-            ? `這個分類已設定多語言同步：\n${groupMembers
-                .map(
-                  (member) =>
-                    `• <#${member.channelId}>：**${languageNames[member.language]}**`,
-                )
-                .join('\n')}\n自動翻譯目前${automatic ? '已啟用' : '尚未啟用'}。`
-            : link && currentLanguage && linkedLanguage && linkedChannelId
-            ? `這個頻道使用 **${languageNames[currentLanguage]}**，已和 <#${linkedChannelId}>（**${languageNames[linkedLanguage]}**）雙向連結。自動翻譯目前${automatic ? '已啟用' : '尚未啟用'}。`
-            : legacyBinding
-              ? `這個頻道仍有舊版 **${bindingLabel(legacyBinding.languageA, legacyBinding.languageB)}** 設定，可使用右鍵翻譯；尚未連結另一個頻道。`
-              : '這個頻道尚未設定雙向翻譯連結。',
+        content: `${channelStatus}\n${preferenceStatus}`,
         flags: MessageFlags.Ephemeral,
       })
       return
@@ -206,7 +253,7 @@ export default defineCommand({
         return
       }
 
-      const requestedChannels = [
+      const selectedChannels = [
         {
           language: 'zt' as const,
           channel: interaction.options.getChannel('chinese-channel'),
@@ -223,9 +270,13 @@ export default defineCommand({
           language: 'ko' as const,
           channel: interaction.options.getChannel('korean-channel'),
         },
-      ].filter((entry) => entry.channel !== null)
+      ].flatMap((entry) =>
+        entry.channel
+          ? [{ language: entry.language, channel: entry.channel }]
+          : [],
+      )
 
-      if (requestedChannels.length < 2) {
+      if (selectedChannels.length < 2) {
         await interaction.reply({
           content: '請至少選擇兩個不同語言的頻道。',
           flags: MessageFlags.Ephemeral,
@@ -233,9 +284,9 @@ export default defineCommand({
         return
       }
       if (
-        requestedChannels.some(
+        selectedChannels.some(
           (entry) =>
-            entry.channel?.type !== ChannelType.GuildText ||
+            entry.channel.type !== ChannelType.GuildText ||
             entry.channel.guildId !== interaction.guildId,
         )
       ) {
@@ -246,10 +297,6 @@ export default defineCommand({
         return
       }
 
-      const selectedChannels = requestedChannels.map((entry) => ({
-        language: entry.language,
-        channel: entry.channel!,
-      }))
       const channelIds = selectedChannels.map((entry) => entry.channel.id)
       if (new Set(channelIds).size !== channelIds.length) {
         await interaction.reply({
@@ -260,9 +307,7 @@ export default defineCommand({
       }
 
       if (
-        selectedChannels.some(
-          (entry) => entry.channel.parentId !== category.id,
-        )
+        selectedChannels.some((entry) => entry.channel.parentId !== category.id)
       ) {
         await interaction.reply({
           content: `所有語言頻道都必須位於「${category.name}」分類中。`,
@@ -315,7 +360,9 @@ export default defineCommand({
             (member) =>
               `• <#${member.channelId}>：**${languageNames[member.language]}**`,
           )
-          .join('\n')}\n自動翻譯目前${automatic ? '已啟用' : '尚未啟用；請設定 `TRANSLATION_AUTO_ENABLED=true` 並重新啟動 Bot'}。`,
+          .join(
+            '\n',
+          )}\n自動翻譯目前${automatic ? '已啟用' : '尚未啟用；請設定 `TRANSLATION_AUTO_ENABLED=true` 並重新啟動 Bot'}。`,
         flags: MessageFlags.Ephemeral,
       })
       return
@@ -383,7 +430,10 @@ export default defineCommand({
       !botMember ||
       !linkedChannel
         .permissionsFor(botMember)
-        .has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])
+        .has([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+        ])
     ) {
       await interaction.reply({
         content: `Bot 在 ${linkedChannel} 缺少「查看頻道」或「傳送訊息」權限。`,

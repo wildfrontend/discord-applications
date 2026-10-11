@@ -1,29 +1,25 @@
 import {
   type Client,
-  escapeMarkdown,
   Events,
+  escapeMarkdown,
   type Message,
   MessageFlags,
   type TextBasedChannel,
 } from 'discord.js'
 import {
-  originalButton,
   originalButtonPrefix,
   parseSourceIds,
   targetSelectPrefix,
 } from './components.js'
-import { isTranslationLanguage, languageNames } from './languages.js'
 import { groqTranslationClient } from './groq-client.js'
+import { isTranslationLanguage, languageNames } from './languages.js'
 import {
   shouldTranslateMessage,
   translateToLanguage,
   translateToLanguages,
   translationContent,
 } from './service.js'
-import {
-  translationChannelLinkStore,
-  translationGroupStore,
-} from './store.js'
+import { translationChannelLinkStore, translationGroupStore } from './store.js'
 
 interface TranslationFeatureOptions {
   automatic: boolean
@@ -50,10 +46,7 @@ async function sendTranslatedMessage(
   targetChannelId: string,
   targetLanguage: Parameters<typeof translateToLanguage>[1],
 ): Promise<void> {
-  const translated = await translateToLanguage(
-    message.content,
-    targetLanguage,
-  )
+  const translated = await translateToLanguage(message.content, targetLanguage)
   await sendTranslatedText(message, targetChannelId, translated.text)
 }
 
@@ -127,13 +120,19 @@ export function startTranslationFeature(
             ]),
           )
           const results = await Promise.allSettled(
-            targets.map((target) =>
-              sendTranslatedText(
+            targets.map((target) => {
+              const translatedText = translationsByLanguage.get(target.language)
+              if (translatedText === undefined) {
+                return Promise.reject(
+                  new Error(`缺少 ${languageNames[target.language]}翻譯結果。`),
+                )
+              }
+              return sendTranslatedText(
                 message,
                 target.channelId,
-                translationsByLanguage.get(target.language)!,
-              ),
-            ),
+                translatedText,
+              )
+            }),
           )
           const failed = results.find(
             (result): result is PromiseRejectedResult =>
