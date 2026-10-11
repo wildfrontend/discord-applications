@@ -50,6 +50,119 @@
           </article>
         </section>
 
+        <section class="panel settings-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">ENVIRONMENT</p>
+              <h2>Bot 環境設定</h2>
+              <p>
+                編輯 <code id="environment-file">Bot .env</code>。密鑰不會顯示；留白代表保留原值。
+              </p>
+            </div>
+          </div>
+          <form id="settings-form" autocomplete="off">
+            <div class="settings-groups">
+              <fieldset class="settings-group">
+                <legend>Discord</legend>
+                <label class="field">
+                  <span>Application ID</span>
+                  <input
+                    id="discord-client-id"
+                    name="discordClientId"
+                    inputmode="numeric"
+                    pattern="[0-9]{17,20}"
+                    required
+                  />
+                </label>
+                <label class="field">
+                  <span>Guild ID <small>選填，開發指令即時生效</small></span>
+                  <input
+                    id="discord-guild-id"
+                    name="discordGuildId"
+                    inputmode="numeric"
+                    pattern="[0-9]{17,20}"
+                  />
+                </label>
+                <label class="field">
+                  <span>Bot Token <small id="discord-token-status">讀取中</small></span>
+                  <input
+                    id="discord-token"
+                    name="discordToken"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="留白以保留目前 Token"
+                  />
+                </label>
+                <label class="check-field danger-check">
+                  <input id="clear-discord-token" type="checkbox" />
+                  清除目前 Bot Token
+                </label>
+              </fieldset>
+
+              <fieldset class="settings-group">
+                <legend>AI 翻譯</legend>
+                <label class="field">
+                  <span>API Key <small id="ai-api-key-status">讀取中</small></span>
+                  <input
+                    id="ai-api-key"
+                    name="aiApiKey"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="留白以保留目前 API Key"
+                  />
+                </label>
+                <label class="field">
+                  <span>模型</span>
+                  <input id="ai-model" name="aiModel" required />
+                </label>
+                <label class="field field-wide">
+                  <span>OpenAI 相容 API Base URL</span>
+                  <input id="ai-base-url" name="aiBaseUrl" type="url" required />
+                </label>
+                <div class="split-fields field-wide">
+                  <label class="field">
+                    <span>服務名稱</span>
+                    <input
+                      id="ai-provider-name"
+                      name="aiProviderName"
+                      pattern="[A-Za-z0-9._-]{1,64}"
+                      required
+                    />
+                  </label>
+                  <label class="field">
+                    <span>最小請求間隔 <small>毫秒</small></span>
+                    <input
+                      id="ai-request-interval"
+                      name="aiMinRequestIntervalMs"
+                      type="number"
+                      min="0"
+                      max="600000"
+                      step="1"
+                      required
+                    />
+                  </label>
+                </div>
+                <label class="check-field">
+                  <input id="translation-auto-enabled" type="checkbox" />
+                  啟用頻道自動翻譯
+                </label>
+                <label class="check-field danger-check">
+                  <input id="clear-ai-api-key" type="checkbox" />
+                  清除目前 API Key
+                </label>
+              </fieldset>
+            </div>
+            <div class="settings-actions">
+              <p id="settings-status" role="status">
+                儲存後需要重啟 Bot 才會套用新設定。
+              </p>
+              <button id="save-settings" class="button button-primary" type="submit">
+                儲存設定
+              </button>
+            </div>
+          </form>
+        </section>
+
         <section class="panel">
           <div class="panel-heading">
             <div>

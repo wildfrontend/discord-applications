@@ -1,9 +1,12 @@
 import {
   createReadStream,
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   statSync,
+  writeFileSync,
 } from 'node:fs'
 import {
   createServer,
@@ -21,6 +24,10 @@ const defaultDataDirectory = resolve(
   appDirectory,
   '../dino-mutant-collections/data',
 )
+const botDirectory = resolve(appDirectory, '../dino-mutant-collections')
+const botEnvironmentFile = resolve(
+  process.env.BOT_ENV_FILE || join(botDirectory, '.env'),
+)
 const dataDirectory = resolve(process.env.BOT_DATA_DIR || defaultDataDirectory)
 const port = Number(process.env.DEV_PANEL_PORT || 4310)
 const host = '127.0.0.1'
@@ -37,9 +44,23 @@ interface SqliteRow {
   [key: string]: unknown
 }
 
-interface MutationBody {
+interface MutationBody extends Record<string, unknown> {
   confirm?: string
 }
+
+const editableEnvironmentKeys = [
+  'DISCORD_CLIENT_ID',
+  'DISCORD_TOKEN',
+  'DISCORD_GUILD_ID',
+  'TRANSLATION_AUTO_ENABLED',
+  'AI_API_KEY',
+  'AI_MODEL',
+  'AI_BASE_URL',
+  'AI_PROVIDER_NAME',
+  'AI_MIN_REQUEST_INTERVAL_MS',
+] as const
+
+type EditableEnvironmentKey = (typeof editableEnvironmentKeys)[number]
 
 function sendJson(
   response: ServerResponse,
@@ -70,6 +91,170 @@ function databaseSize(file: string): number | null {
   } catch {
     return null
   }
+}
+
+function parseEnvironmentFile(): Map<string, string> {
+  const values = new Map<string, string>()
+  if (!existsSync(botEnvironmentFile)) return values
+  for (const line of readFileSync(botEnvironmentFile, 'utf8').split(/\r?\n/)) {
+    const match = line.match(
+      /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/,
+    )
+    if (!match) continue
+    const [, key, rawValue] = match
+    let value = rawValue.trim()
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1)
+    }
+    values.set(key, value)
+  }
+  return values
+}
+
+function environmentSettings() {
+  const values = parseEnvironmentFile()
+  return {
+    file: botEnvironmentFile,
+    exists: existsSync(botEnvironmentFile),
+    discordClientId: values.get('DISCORD_CLIENT_ID') ?? '',
+    discordGuildId: values.get('DISCORD_GUILD_ID') ?? '',
+    discordTokenConfigured: Boolean(values.get('DISCORD_TOKEN')),
+    translationAutoEnabled:
+      values.get('TRANSLATION_AUTO_ENABLED')?.toLowerCase() === 'true',
+    aiApiKeyConfigured: Boolean(values.get('AI_API_KEY')),
+    aiModel: values.get('AI_MODEL') ?? 'qwen/qwen3.8-27b',
+    aiBaseUrl: values.get('AI_BASE_URL') ?? 'https://api.groq.com/openai/v1',
+    aiProviderName: values.get('AI_PROVIDER_NAME') ?? 'groq',
+    aiMinRequestIntervalMs: values.get('AI_MIN_REQUEST_INTERVAL_MS') ?? '2100',
+  }
+}
+
+function requiredString(
+  body: MutationBody,
+  field: string,
+  label: string,
+): string {
+  const value = body[field]
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${label}不可空白。`)
+  }
+  const trimmed = value.trim()
+  if (/\r|\n/.test(trimmed)) throw new Error(`${label}不可包含換行。`)
+  return trimmed
+}
+
+function optionalString(body: MutationBody, field: string): string {
+  const value = body[field]
+  if (value === undefined || value === null) return ''
+  if (typeof value !== 'string') throw new Error(`${field} 格式錯誤。`)
+  const trimmed = value.trim()
+  if (/\r|\n/.test(trimmed)) throw new Error(`${field} 不可包含換行。`)
+  return trimmed
+}
+
+function validateDiscordId(value: string, label: string): void {
+  if (!/^\d{17,20}$/.test(value)) {
+    throw new Error(`${label}必須是 17 到 20 位數字。`)
+  }
+}
+
+function updateEnvironmentFile(
+  updates: Partial<Record<EditableEnvironmentKey, string | null>>,
+): void {
+  mkdirSync(dirname(botEnvironmentFile), { recursive: true })
+  const existing = existsSync(botEnvironmentFile)
+    ? readFileSync(botEnvironmentFile, 'utf8')
+    : ''
+  const eol = existing.includes('\r\n') ? '\r\n' : '\n'
+  const updateValues = new Map(Object.entries(updates))
+  const written = new Set<string>()
+  const lines = existing.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/)
+    const key = match?.[1] as EditableEnvironmentKey | undefined
+    if (!key || !updateValues.has(key)) return [line]
+    if (written.has(key)) return []
+    written.add(key)
+    const value = updateValues.get(key)
+    return value === null ? [] : [`${key}=${value}`]
+  })
+
+  while (lines.at(-1) === '') lines.pop()
+  for (const [key, value] of updateValues) {
+    if (!written.has(key) && value !== null) lines.push(`${key}=${value}`)
+  }
+
+  const temporaryFile = `${botEnvironmentFile}.${process.pid}.tmp`
+  writeFileSync(temporaryFile, `${lines.join(eol)}${eol}`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  })
+  renameSync(temporaryFile, botEnvironmentFile)
+}
+
+function saveEnvironmentSettings(body: MutationBody): void {
+  const discordClientId = requiredString(
+    body,
+    'discordClientId',
+    'Discord Application ID',
+  )
+  validateDiscordId(discordClientId, 'Discord Application ID')
+  const discordGuildId = optionalString(body, 'discordGuildId')
+  if (discordGuildId) validateDiscordId(discordGuildId, 'Discord Guild ID')
+
+  const aiModel = requiredString(body, 'aiModel', 'AI 模型')
+  const aiBaseUrl = requiredString(body, 'aiBaseUrl', 'AI Base URL')
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(aiBaseUrl)
+  } catch {
+    throw new Error('AI Base URL 格式錯誤。')
+  }
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    throw new Error('AI Base URL 僅支援 http 或 https。')
+  }
+  if (parsedUrl.username || parsedUrl.password) {
+    throw new Error('AI Base URL 不可包含帳號或密碼。')
+  }
+
+  const aiProviderName = requiredString(body, 'aiProviderName', 'AI 服務名稱')
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(aiProviderName)) {
+    throw new Error('AI 服務名稱只能使用英數字、點、底線與連字號。')
+  }
+  const intervalText = requiredString(
+    body,
+    'aiMinRequestIntervalMs',
+    'AI 請求間隔',
+  )
+  const interval = Number(intervalText)
+  if (!Number.isInteger(interval) || interval < 0 || interval > 600_000) {
+    throw new Error('AI 請求間隔必須是 0 到 600000 毫秒的整數。')
+  }
+  if (typeof body.translationAutoEnabled !== 'boolean') {
+    throw new Error('自動翻譯設定格式錯誤。')
+  }
+
+  const updates: Partial<Record<EditableEnvironmentKey, string | null>> = {
+    DISCORD_CLIENT_ID: discordClientId,
+    DISCORD_GUILD_ID: discordGuildId || null,
+    TRANSLATION_AUTO_ENABLED: String(body.translationAutoEnabled),
+    AI_MODEL: aiModel,
+    AI_BASE_URL: aiBaseUrl.replace(/\/$/, ''),
+    AI_PROVIDER_NAME: aiProviderName,
+    AI_MIN_REQUEST_INTERVAL_MS: String(interval),
+  }
+
+  const discordToken = optionalString(body, 'discordToken')
+  if (discordToken) updates.DISCORD_TOKEN = discordToken
+  if (body.clearDiscordToken === true) updates.DISCORD_TOKEN = null
+  const aiApiKey = optionalString(body, 'aiApiKey')
+  if (aiApiKey) updates.AI_API_KEY = aiApiKey
+  if (body.clearAiApiKey === true) updates.AI_API_KEY = null
+
+  updateEnvironmentFile(updates)
 }
 
 function readRows(file: string, table: string, sql: string): SqliteRow[] {
@@ -365,6 +550,11 @@ const server = createServer(async (request, response) => {
       return
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/settings') {
+      sendJson(response, 200, environmentSettings())
+      return
+    }
+
     if (request.method === 'GET') {
       sendStatic(response, url.pathname)
       return
@@ -376,6 +566,16 @@ const server = createServer(async (request, response) => {
     }
 
     const body = await readBody(request)
+    if (request.method === 'PUT' && url.pathname === '/api/settings') {
+      saveEnvironmentSettings(body)
+      sendJson(response, 200, {
+        ok: true,
+        settings: environmentSettings(),
+        restartRequired: true,
+      })
+      return
+    }
+
     const recurringMatch = url.pathname.match(
       /^\/api\/recurring\/([0-9a-f-]{36})$/,
     )

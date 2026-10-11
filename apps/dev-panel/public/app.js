@@ -31,6 +31,23 @@ const elements = {
   preferenceEmpty: document.querySelector('#preference-empty'),
   translationMeta: document.querySelector('#translation-meta'),
   lastUpdated: document.querySelector('#last-updated'),
+  settingsForm: document.querySelector('#settings-form'),
+  settingsStatus: document.querySelector('#settings-status'),
+  saveSettings: document.querySelector('#save-settings'),
+  environmentFile: document.querySelector('#environment-file'),
+  discordClientId: document.querySelector('#discord-client-id'),
+  discordGuildId: document.querySelector('#discord-guild-id'),
+  discordToken: document.querySelector('#discord-token'),
+  discordTokenStatus: document.querySelector('#discord-token-status'),
+  clearDiscordToken: document.querySelector('#clear-discord-token'),
+  translationAutoEnabled: document.querySelector('#translation-auto-enabled'),
+  aiApiKey: document.querySelector('#ai-api-key'),
+  aiApiKeyStatus: document.querySelector('#ai-api-key-status'),
+  clearAiApiKey: document.querySelector('#clear-ai-api-key'),
+  aiModel: document.querySelector('#ai-model'),
+  aiBaseUrl: document.querySelector('#ai-base-url'),
+  aiProviderName: document.querySelector('#ai-provider-name'),
+  aiRequestInterval: document.querySelector('#ai-request-interval'),
 }
 
 function formatBytes(value) {
@@ -193,6 +210,42 @@ function showError(message) {
   elements.error.hidden = false
 }
 
+function secretStatus(configured) {
+  return configured ? '已設定' : '尚未設定'
+}
+
+function renderSettings(settings) {
+  elements.environmentFile.textContent = settings.file
+  elements.discordClientId.value = settings.discordClientId
+  elements.discordGuildId.value = settings.discordGuildId
+  elements.discordToken.value = ''
+  elements.discordTokenStatus.textContent = secretStatus(
+    settings.discordTokenConfigured,
+  )
+  elements.clearDiscordToken.checked = false
+  elements.translationAutoEnabled.checked = settings.translationAutoEnabled
+  elements.aiApiKey.value = ''
+  elements.aiApiKeyStatus.textContent = secretStatus(
+    settings.aiApiKeyConfigured,
+  )
+  elements.clearAiApiKey.checked = false
+  elements.aiModel.value = settings.aiModel
+  elements.aiBaseUrl.value = settings.aiBaseUrl
+  elements.aiProviderName.value = settings.aiProviderName
+  elements.aiRequestInterval.value = settings.aiMinRequestIntervalMs
+}
+
+async function loadSettings() {
+  try {
+    const response = await fetch('/api/settings', { cache: 'no-store' })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || '無法讀取環境設定')
+    renderSettings(data)
+  } catch (error) {
+    showError(error instanceof Error ? error.message : String(error))
+  }
+}
+
 async function loadDashboard() {
   elements.refresh.disabled = true
   try {
@@ -208,14 +261,14 @@ async function loadDashboard() {
   }
 }
 
-async function mutate(path, method, confirmValue) {
+async function mutate(path, method, body) {
   const response = await fetch(path, {
     method,
     headers: {
       'Content-Type': 'application/json',
       'X-Dev-Panel-Action': '1',
     },
-    body: JSON.stringify({ confirm: confirmValue }),
+    body: JSON.stringify(body),
   })
   const result = await response.json()
   if (!response.ok) throw new Error(result.error || '操作失敗')
@@ -226,7 +279,7 @@ async function runAction(button, path, method, confirmValue, message) {
   if (!window.confirm(message)) return
   button.disabled = true
   try {
-    await mutate(path, method, confirmValue)
+    await mutate(path, method, { confirm: confirmValue })
     await loadDashboard()
   } catch (error) {
     showError(error instanceof Error ? error.message : String(error))
@@ -234,6 +287,40 @@ async function runAction(button, path, method, confirmValue, message) {
     button.disabled = false
   }
 }
+
+elements.settingsForm.addEventListener('submit', async (event) => {
+  event.preventDefault()
+  if (!elements.settingsForm.reportValidity()) return
+  elements.saveSettings.disabled = true
+  elements.settingsStatus.className = ''
+  elements.settingsStatus.textContent = '儲存中…'
+  try {
+    const result = await mutate('/api/settings', 'PUT', {
+      discordClientId: elements.discordClientId.value,
+      discordGuildId: elements.discordGuildId.value,
+      discordToken: elements.discordToken.value,
+      clearDiscordToken: elements.clearDiscordToken.checked,
+      translationAutoEnabled: elements.translationAutoEnabled.checked,
+      aiApiKey: elements.aiApiKey.value,
+      clearAiApiKey: elements.clearAiApiKey.checked,
+      aiModel: elements.aiModel.value,
+      aiBaseUrl: elements.aiBaseUrl.value,
+      aiProviderName: elements.aiProviderName.value,
+      aiMinRequestIntervalMs: elements.aiRequestInterval.value,
+    })
+    renderSettings(result.settings)
+    elements.settingsStatus.className = 'is-success'
+    elements.settingsStatus.textContent =
+      '已安全寫入 .env；請重啟 Bot 套用新設定。'
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    elements.settingsStatus.className = 'is-error'
+    elements.settingsStatus.textContent = message
+    showError(message)
+  } finally {
+    elements.saveSettings.disabled = false
+  }
+})
 
 document.addEventListener('click', (event) => {
   const target = event.target
@@ -295,6 +382,7 @@ document.addEventListener('click', (event) => {
 
 elements.refresh.addEventListener('click', () => void loadDashboard())
 void loadDashboard()
+void loadSettings()
 setInterval(() => {
   if (!document.hidden) void loadDashboard()
 }, 10_000)
