@@ -1,5 +1,10 @@
 **/node_modules
 **/dist
 **/.turbo
+**/.runtime
 **/.env
+**/.env.*
+**/data
+**/*.sqlite*
+**/*.log
 .git

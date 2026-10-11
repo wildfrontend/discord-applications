@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: dino-mutant-collections
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    numInstances: 1
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: DATABASE_DRIVER
+        value: libsql
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_AUTH_TOKEN
+        sync: false
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: qwen/qwen3.8-27b
+      - key: AI_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: AI_PROVIDER_NAME
+        value: groq
+      - key: AI_MIN_REQUEST_INTERVAL_MS
+        value: "2100"
+      - key: TRANSLATION_AUTO_ENABLED
+        value: "false"
