@@ -103,9 +103,27 @@ AI_PROVIDER_NAME=groq
 
 根目錄的 `Dockerfile` 會產生只有 Bot 與正式依賴的映像；同一份映像可用在本機、NAS、VPS 或支援 Docker 的雲端平台。
 
-先建立並填好 `apps/dino-mutant-collections/.env`，再啟動：
+第一次自架可使用互動式設定精靈，不需要手動編輯 `.env`：
 
 ```bash
+docker compose run --rm --build setup
+docker compose up -d bot
+docker compose logs -f bot
+```
+
+設定精靈會逐步詢問 Discord、AI、翻譯與資料庫設定；Token 採隱藏輸入，完成後以只有檔案擁有者能讀寫的權限儲存到 `apps/dino-mutant-collections/.env`。它也能驗證 Discord Token 並產生 Bot 邀請連結。
+
+之後若要修改設定，可再次執行：
+
+```bash
+docker compose run --rm setup
+docker compose up -d --force-recreate bot
+```
+
+也可以從範例手動建立 `.env`，再啟動：
+
+```bash
+cp apps/dino-mutant-collections/.env.example apps/dino-mutant-collections/.env
 docker compose up -d --build
 docker compose logs -f bot
 ```
