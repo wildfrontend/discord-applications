@@ -12,7 +12,6 @@ services:
         required: false
     environment:
       BOT_DATA_DIR: /app/data
-      DATABASE_DRIVER: sqlite
       PORT: 10000
     ports:
       - 127.0.0.1:10000:10000

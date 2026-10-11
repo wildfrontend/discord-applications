@@ -103,6 +103,23 @@ AI_PROVIDER_NAME=groq
 
 根目錄的 `Dockerfile` 會產生只有 Bot 與正式依賴的映像；同一份映像可用在本機、NAS、VPS 或支援 Docker 的雲端平台。
 
+已發布的多平台映像位於 `ghcr.io/wildfrontend/dino-mutant-collections:latest`，支援 `linux/amd64` 與 `linux/arm64`。使用線上映像時不需要在自架機器安裝 Node.js 或 pnpm，也不需要自行建置：
+
+```bash
+git clone https://github.com/wildfrontend/discord-applications.git
+cd discord-applications
+docker compose -f compose.self-host.yaml run --rm setup
+docker compose -f compose.self-host.yaml up -d bot
+docker compose -f compose.self-host.yaml logs -f bot
+```
+
+更新線上映像並重建容器：
+
+```bash
+docker compose -f compose.self-host.yaml pull
+docker compose -f compose.self-host.yaml up -d bot
+```
+
 第一次自架可使用互動式設定精靈，不需要手動編輯 `.env`：
 
 ```bash
