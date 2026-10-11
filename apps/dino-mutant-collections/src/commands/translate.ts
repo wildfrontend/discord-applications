@@ -325,12 +325,13 @@ export default defineCommand({
                 .has([
                   PermissionFlagsBits.ViewChannel,
                   PermissionFlagsBits.SendMessages,
+                  PermissionFlagsBits.ManageWebhooks,
                 ]),
           )
         : selectedChannels[0]
       if (inaccessibleChannel) {
         await interaction.reply({
-          content: `Bot 在 ${inaccessibleChannel.channel} 缺少「查看頻道」或「傳送訊息」權限。`,
+          content: `Bot 在 ${inaccessibleChannel.channel} 缺少「查看頻道」、「傳送訊息」或「管理 Webhook」權限。`,
           flags: MessageFlags.Ephemeral,
         })
         return
@@ -433,10 +434,11 @@ export default defineCommand({
         .has([
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ManageWebhooks,
         ])
     ) {
       await interaction.reply({
-        content: `Bot 在 ${linkedChannel} 缺少「查看頻道」或「傳送訊息」權限。`,
+        content: `Bot 在 ${linkedChannel} 缺少「查看頻道」、「傳送訊息」或「管理 Webhook」權限。`,
         flags: MessageFlags.Ephemeral,
       })
       return
