@@ -1,5 +1,5 @@
-# 用法：docker build --build-arg APP=example-bot -t dc-example-bot .
-ARG APP=example-bot
+# 用法：docker build --build-arg APP=dino-mutant-collections -t dino-mutant-collections .
+ARG APP=dino-mutant-collections
 
 FROM node:24-slim AS build
 ARG APP

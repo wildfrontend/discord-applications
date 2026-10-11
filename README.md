@@ -6,7 +6,7 @@
 
 ```
 apps/                 # 每個 Discord application 一個資料夾
-  example-bot/        # 範例 bot（/ping）
+  dino-mutant-collections/ # Discord 活動與多語言翻譯 bot
 packages/             # 共用套件
   core/               # @dc/core：client 建立、slash／右鍵指令分派與註冊、env 工具
 ```
@@ -20,20 +20,20 @@ packages/             # 共用套件
 
 ```bash
 pnpm install
-cp apps/example-bot/.env.example apps/example-bot/.env   # 填入上面的值
+cp apps/dino-mutant-collections/.env.example apps/dino-mutant-collections/.env   # 填入上面的值
 ```
 
 ## 2. 邀請 bot 進伺服器
 
 ```bash
-pnpm --filter @dc/example-bot invite   # 印出邀請連結，用瀏覽器開啟並選擇伺服器
+pnpm --filter @dc/dino-mutant-collections invite   # 印出邀請連結，用瀏覽器開啟並選擇伺服器
 ```
 
 ## 3. 本機執行
 
 ```bash
-pnpm --filter @dc/example-bot deploy-commands   # 註冊 slash commands
-pnpm --filter @dc/example-bot dev               # 開發模式（watch）
+pnpm --filter @dc/dino-mutant-collections deploy-commands   # 註冊 slash commands
+pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（watch）
 ```
 
 在伺服器輸入 `/ping`，bot 回覆 `Pong!` 就成功了。
@@ -54,7 +54,7 @@ pnpm --filter @dc/example-bot dev               # 開發模式（watch）
 - `/event list`：列出自訂重複排程。
 - `/event remove`：停止排程，不刪除已建立的 Discord 活動。
 
-第一版支援「其他地方」與一般語音頻道活動；Stage 活動需要更多頻道管理權限，暫不處理。bot 需要「建立活動」權限，一般成員只能管理自己建立的活動，具有「管理活動」權限者可以管理全部排程。排程使用 SQLite，預設保存在 `apps/example-bot/data/`；舊版 JSON 資料會在啟動時自動遷移。部署 Docker 時請將持久化磁碟掛載到 `/app/data`，也可以用 `BOT_DATA_DIR` 指定其他位置。
+第一版支援「其他地方」與一般語音頻道活動；Stage 活動需要更多頻道管理權限，暫不處理。bot 需要「建立活動」權限，一般成員只能管理自己建立的活動，具有「管理活動」權限者可以管理全部排程。排程使用 SQLite，預設保存在 `apps/dino-mutant-collections/data/`；舊版 JSON 資料會在啟動時自動遷移。部署 Docker 時請將持久化磁碟掛載到 `/app/data`，也可以用 `BOT_DATA_DIR` 指定其他位置。
 
 ## 多語言頻道翻譯
 
@@ -106,10 +106,10 @@ SQLite 資料使用 Docker volume 保存。
 Bot 要持續執行才會回應，正式上線需要放到主機上。根目錄的 `Dockerfile` 可部署到任何支援 Docker 的平台（Railway、Fly.io、Render、VPS 等）：
 
 ```bash
-docker build --build-arg APP=example-bot -t dc-example-bot .
+docker build --build-arg APP=dino-mutant-collections -t dino-mutant-collections .
 docker run -d --restart unless-stopped \
   -e DISCORD_TOKEN=... -e DISCORD_CLIENT_ID=... \
-  dc-example-bot
+  dino-mutant-collections
 ```
 
 - 容器啟動時會先同步 slash commands，再啟動 bot。
@@ -128,7 +128,7 @@ docker run -d --restart unless-stopped \
 
 ## 新增一個 application
 
-1. 複製 `apps/example-bot` 為 `apps/<name>`，修改 `package.json` 的 `name`（例如 `@dc/<name>`）。
+1. 複製 `apps/dino-mutant-collections` 為 `apps/<name>`，修改 `package.json` 的 `name`（例如 `@dc/<name>`）。
 2. 在 `src/commands/` 用 `defineCommand` 新增指令，並加到 `src/commands/index.ts`。
 3. `pnpm install` 後即可用 `pnpm --filter @dc/<name> dev` 啟動。
 
