@@ -80,8 +80,16 @@ pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（wat
 - 群組頻道可選擇任一支援的目標語言。
 - 雙向配對頻道會自動翻成另一種配對語言。
 - 未綁定或無法判斷語言時，會顯示只有操作者看得到的目標語言選單。
-- 可用 `/translate config language:繁體中文` 儲存個人預設語言，之後右鍵翻譯不需重複選擇。
+- 可用 `/translate config input-language:繁體中文 output-language:日文` 儲存個人預設語言；之後右鍵翻譯會直接使用預設輸出語言。
 - 右鍵手動翻譯不需要 Message Content Intent。
+
+也可以輸入指令，先翻譯自己的文字再公開送到目前頻道：
+
+```text
+/translate send message:大家好
+```
+
+`send` 會使用個人預設的輸入與輸出語言，並透過 Webhook 沿用下指令者的伺服器暱稱與頭像公開送出。每次使用時仍可另外選擇 `input-language` 或 `output-language` 覆寫預設；若未設定輸入語言則自動偵測，若尚未設定輸出語言則必須在該次指令選擇。Bot 需要目前頻道的「管理 Webhook」權限。
 
 頻道自動翻譯預設關閉。要啟用時：
 

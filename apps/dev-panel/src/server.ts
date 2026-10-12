@@ -411,14 +411,33 @@ async function dashboardData() {
     groupsByCategory.set(member.category_id, group)
   }
 
-  const preferences = readRows(
-    translationDatabaseFile,
-    'translation_user_preferences',
-    `SELECT user_id, language, updated_at
-       FROM translation_user_preferences
-      ORDER BY updated_at DESC`,
-  ).map((row) => ({
+  let preferenceRows: SqliteRow[]
+  try {
+    preferenceRows = readRows(
+      translationDatabaseFile,
+      'translation_user_preferences',
+      `SELECT user_id, source_language, language, updated_at
+         FROM translation_user_preferences
+        ORDER BY updated_at DESC`,
+    )
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !/no such column:\s*source_language/i.test(error.message)
+    ) {
+      throw error
+    }
+    preferenceRows = readRows(
+      translationDatabaseFile,
+      'translation_user_preferences',
+      `SELECT user_id, NULL AS source_language, language, updated_at
+         FROM translation_user_preferences
+        ORDER BY updated_at DESC`,
+    )
+  }
+  const preferences = preferenceRows.map((row) => ({
     userId: row.user_id,
+    sourceLanguage: row.source_language,
     language: row.language,
     updatedAt: row.updated_at,
   }))

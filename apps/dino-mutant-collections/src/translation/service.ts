@@ -85,8 +85,12 @@ export async function translateAcrossBinding(
 export async function translateToLanguage(
   text: string,
   target: TranslationLanguage,
+  sourceLanguage: TranslationLanguage | 'auto' = 'auto',
 ): Promise<CompletedTranslation> {
-  const source = await detectMessageLanguage(text)
+  const source =
+    sourceLanguage === 'auto'
+      ? await detectMessageLanguage(text)
+      : sourceLanguage
   if (source === target) {
     return { source: target, target, text }
   }
