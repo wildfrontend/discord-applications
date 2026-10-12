@@ -9,15 +9,23 @@ import {
   isTranslationLanguage,
   languageChoices,
   languageNames,
+  type TranslationLanguage,
 } from '../translation/languages.js'
+import { translateToLanguage } from '../translation/service.js'
 import {
   translationBindingStore,
   translationChannelLinkStore,
   translationGroupStore,
   translationPreferenceStore,
 } from '../translation/store.js'
+import { sendTranslationWebhook } from '../translation/webhook.js'
 
 const askEveryTimeValue = 'ask'
+const autoDetectValue = 'auto'
+
+function selectedLanguage(value: string | null): TranslationLanguage | null {
+  return value && isTranslationLanguage(value) ? value : null
+}
 
 function bindingLabel(languageA: string, languageB: string): string {
   if (!isTranslationLanguage(languageA) || !isTranslationLanguage(languageB)) {
@@ -29,16 +37,53 @@ function bindingLabel(languageA: string, languageB: string): string {
 export default defineCommand({
   data: new SlashCommandBuilder()
     .setName('translate')
-    .setDescription('設定多語言頻道之間的自動翻譯')
+    .setDescription('翻譯訊息，或設定多語言頻道的自動翻譯')
     .setDMPermission(false)
     .addSubcommand((subcommand) =>
       subcommand
-        .setName('config')
-        .setDescription('設定右鍵手動翻譯的個人目標語言')
+        .setName('send')
+        .setDescription('將輸入內容翻譯後公開傳送到目前頻道')
         .addStringOption((option) =>
           option
-            .setName('language')
-            .setDescription('預設翻譯語言；也可以恢復為每次手動選擇')
+            .setName('message')
+            .setDescription('要翻譯並送出的內容')
+            .setRequired(true)
+            .setMaxLength(4_000),
+        )
+        .addStringOption((option) =>
+          option
+            .setName('input-language')
+            .setDescription('原文語言；未選擇時使用個人預設或自動偵測')
+            .addChoices(
+              { name: '自動偵測', value: autoDetectValue },
+              ...languageChoices,
+            ),
+        )
+        .addStringOption((option) =>
+          option
+            .setName('output-language')
+            .setDescription('譯文語言；未選擇時使用個人預設')
+            .addChoices(...languageChoices),
+        ),
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('config')
+        .setDescription('設定個人的預設輸入與輸出語言')
+        .addStringOption((option) =>
+          option
+            .setName('input-language')
+            .setDescription('你的預設輸入語言')
+            .setRequired(true)
+            .addChoices(
+              { name: '自動偵測', value: autoDetectValue },
+              ...languageChoices,
+            ),
+        )
+        .addStringOption((option) =>
+          option
+            .setName('output-language')
+            .setDescription('你的預設輸出語言；也可恢復為每次選擇')
             .setRequired(true)
             .addChoices(...languageChoices, {
               name: '每次手動選擇',
@@ -131,26 +176,143 @@ export default defineCommand({
     }
 
     const subcommand = interaction.options.getSubcommand()
-    if (subcommand === 'config') {
-      const language = interaction.options.getString('language', true)
-      if (language === askEveryTimeValue) {
-        await translationPreferenceStore.remove(interaction.user.id)
+    if (subcommand === 'send') {
+      const message = interaction.options.getString('message', true).trim()
+      if (!message) {
         await interaction.reply({
-          content: '已改為每次手動選擇翻譯語言。',
+          content: '請輸入要翻譯的內容。',
           flags: MessageFlags.Ephemeral,
         })
         return
       }
-      if (!isTranslationLanguage(language)) {
+
+      const channel = interaction.channel
+      const botMember = interaction.guild.members.me
+      if (channel?.type !== ChannelType.GuildText) {
+        await interaction.reply({
+          content: '翻譯訊息目前只能從一般文字頻道送出。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+      if (
+        !botMember ||
+        !channel
+          .permissionsFor(botMember)
+          .has([
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ManageWebhooks,
+          ])
+      ) {
+        await interaction.reply({
+          content:
+            'Bot 在這個頻道需要「查看頻道」、「傳送訊息」與「管理 Webhook」權限，才能用你的暱稱和頭像送出翻譯。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+
+      const preference = await translationPreferenceStore.get(
+        interaction.user.id,
+      )
+      const inputOption = interaction.options.getString('input-language')
+      const outputOption = interaction.options.getString('output-language')
+      const source =
+        inputOption === autoDetectValue
+          ? null
+          : (selectedLanguage(inputOption) ??
+            preference?.sourceLanguage ??
+            null)
+      const target = selectedLanguage(outputOption) ?? preference?.language
+
+      if (!target) {
+        await interaction.reply({
+          content:
+            '請在 `output-language` 選擇輸出語言，或先用 `/translate config` 設定個人預設值。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+      if (source === target) {
+        await interaction.reply({
+          content: '輸入語言與輸出語言不能相同。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral })
+      try {
+        const translated = await translateToLanguage(
+          message,
+          target,
+          source ?? 'auto',
+        )
+        const content =
+          translated.text.length <= 2_000
+            ? translated.text
+            : `${translated.text.slice(0, 1_999)}…`
+        await sendTranslationWebhook(channel, interaction.client.user.id, {
+          content,
+          username: interaction.member.displayName,
+          avatarURL: interaction.member.displayAvatarURL({
+            extension: 'png',
+            size: 128,
+          }),
+        })
+        await interaction.editReply(
+          `已用你的暱稱與頭像送出${languageNames[target]}翻譯。`,
+        )
+      } catch (error) {
+        const details = error instanceof Error ? error.message : String(error)
+        await interaction.editReply(
+          `翻譯或 Webhook 發送失敗：${details}`.slice(0, 1_900),
+        )
+      }
+      return
+    }
+
+    if (subcommand === 'config') {
+      const inputLanguage = interaction.options.getString(
+        'input-language',
+        true,
+      )
+      const outputLanguage = interaction.options.getString(
+        'output-language',
+        true,
+      )
+      if (outputLanguage === askEveryTimeValue) {
+        await translationPreferenceStore.remove(interaction.user.id)
+        await interaction.reply({
+          content: '已清除個人語言預設；之後請在每次翻譯時選擇輸出語言。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+      const source =
+        inputLanguage === autoDetectValue
+          ? null
+          : selectedLanguage(inputLanguage)
+      const target = selectedLanguage(outputLanguage)
+      if ((inputLanguage !== autoDetectValue && !source) || !target) {
         await interaction.reply({
           content: '不支援選擇的語言。',
           flags: MessageFlags.Ephemeral,
         })
         return
       }
-      await translationPreferenceStore.set(interaction.user.id, language)
+      if (source === target) {
+        await interaction.reply({
+          content: '輸入語言與輸出語言不能相同。',
+          flags: MessageFlags.Ephemeral,
+        })
+        return
+      }
+      await translationPreferenceStore.set(interaction.user.id, target, source)
+      const sourceName = source ? languageNames[source] : '自動偵測'
       await interaction.reply({
-        content: `個人翻譯語言已設定為 **${languageNames[language]}**；之後右鍵翻譯會直接使用這個語言。`,
+        content: `個人翻譯預設已設定為 **${sourceName} → ${languageNames[target]}**；使用 \`/translate send\` 時仍可另外選擇語言覆寫。`,
         flags: MessageFlags.Ephemeral,
       })
       return
@@ -202,8 +364,8 @@ export default defineCommand({
             ? `這個頻道仍有舊版 **${bindingLabel(legacyBinding.languageA, legacyBinding.languageB)}** 設定，可使用右鍵翻譯；尚未連結另一個頻道。`
             : '這個頻道尚未設定雙向翻譯連結。'
       const preferenceStatus = preference
-        ? `你的右鍵翻譯預設為 **${languageNames[preference.language]}**。`
-        : '你的右鍵翻譯目前會每次詢問目標語言。'
+        ? `你的個人翻譯預設為 **${preference.sourceLanguage ? languageNames[preference.sourceLanguage] : '自動偵測'} → ${languageNames[preference.language]}**；右鍵翻譯會使用相同的輸出語言。`
+        : '你尚未設定個人翻譯預設；右鍵翻譯會每次詢問輸出語言。'
       await interaction.reply({
         content: `${channelStatus}\n${preferenceStatus}`,
         flags: MessageFlags.Ephemeral,

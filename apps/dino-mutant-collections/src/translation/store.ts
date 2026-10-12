@@ -34,6 +34,7 @@ export interface TranslationGroupMember {
 
 export interface TranslationPreference {
   userId: string
+  sourceLanguage: TranslationLanguage | null
   language: TranslationLanguage
   updatedAt: string
 }
@@ -71,6 +72,7 @@ interface GroupMemberRow {
 
 interface PreferenceRow {
   user_id: string
+  source_language: TranslationLanguage | null
   language: TranslationLanguage
   updated_at: string
 }
@@ -130,6 +132,23 @@ await database.batch(
   'write',
 )
 
+const preferenceColumns = await database.execute(
+  'PRAGMA table_info(translation_user_preferences)',
+)
+if (
+  !preferenceColumns.rows.some(
+    (row) =>
+      typeof row === 'object' &&
+      row !== null &&
+      'name' in row &&
+      row.name === 'source_language',
+  )
+) {
+  await database.execute(`ALTER TABLE translation_user_preferences
+    ADD COLUMN source_language TEXT
+    CHECK (source_language IS NULL OR source_language IN ('zt', 'en', 'ja', 'ko'))`)
+}
+
 function firstRow<T>(rows: ReadonlyArray<unknown>): T | undefined {
   return rows[0] as T | undefined
 }
@@ -174,6 +193,7 @@ function toGroupMember(row: GroupMemberRow): TranslationGroupMember {
 function toPreference(row: PreferenceRow): TranslationPreference {
   return {
     userId: row.user_id,
+    sourceLanguage: row.source_language,
     language: row.language,
     updatedAt: row.updated_at,
   }
@@ -407,7 +427,7 @@ export const translationGroupStore = {
 export const translationPreferenceStore = {
   async get(userId: string): Promise<TranslationPreference | null> {
     const result = await database.execute({
-      sql: `SELECT user_id, language, updated_at
+      sql: `SELECT user_id, source_language, language, updated_at
         FROM translation_user_preferences WHERE user_id = ?`,
       args: [userId],
     })
@@ -418,19 +438,27 @@ export const translationPreferenceStore = {
   async set(
     userId: string,
     language: TranslationLanguage,
+    sourceLanguage: TranslationLanguage | null = null,
   ): Promise<TranslationPreference> {
     const preference: TranslationPreference = {
       userId,
+      sourceLanguage,
       language,
       updatedAt: new Date().toISOString(),
     }
     await database.execute({
       sql: `INSERT INTO translation_user_preferences
-        (user_id, language, updated_at) VALUES (?, ?, ?)
+        (user_id, source_language, language, updated_at) VALUES (?, ?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET
+          source_language = excluded.source_language,
           language = excluded.language,
           updated_at = excluded.updated_at`,
-      args: [preference.userId, preference.language, preference.updatedAt],
+      args: [
+        preference.userId,
+        preference.sourceLanguage,
+        preference.language,
+        preference.updatedAt,
+      ],
     })
     return preference
   },

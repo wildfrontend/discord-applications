@@ -166,7 +166,7 @@ function renderPreferences(preferences) {
       textElement(
         'span',
         'secondary-value',
-        `${languageNames[preference.language] || preference.language} · ${formatDate(preference.updatedAt)}`,
+        `${preference.sourceLanguage ? languageNames[preference.sourceLanguage] || preference.sourceLanguage : '自動偵測'} → ${languageNames[preference.language] || preference.language} · ${formatDate(preference.updatedAt)}`,
       ),
     )
     card.append(
