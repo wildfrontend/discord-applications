@@ -20,7 +20,11 @@ import {
 
 export default defineMessageCommand({
   data: new ContextMenuCommandBuilder()
-    .setName('翻譯這則訊息')
+    .setName('Translate this message')
+    .setNameLocalizations({
+      'zh-TW': '翻譯這則訊息',
+      ko: '이 메시지 번역',
+    })
     .setType(ApplicationCommandType.Message)
     .setDMPermission(false)
     .toJSON(),
