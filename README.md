@@ -59,55 +59,57 @@ pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（wat
 
 第一版支援「其他地方」與一般語音頻道活動；Stage 活動需要更多頻道管理權限，暫不處理。Bot 需要「建立活動」與「管理活動」權限，一般成員只能管理自己建立的活動，具有「管理活動」權限者可以管理全部排程。預設使用 SQLite，資料保存在 `apps/dino-mutant-collections/data/`；舊版 JSON 資料會在啟動時自動遷移。Docker Compose 會將資料保存在具名 volume，也可以用 `BOT_DATA_DIR` 指定其他位置。
 
-## 多語言頻道翻譯
+## Multilingual translation
 
-內建繁體中文、英文、日文與韓文，可連接採用 OpenAI 相容 API 的雲端模型提供長句與口語翻譯，Render 等記憶體有限的環境不需要載入本機模型。預設範例使用 Groq 上的 Qwen 模型。
+The bot supports Traditional Chinese, English, Japanese, and Korean. It uses an OpenAI-compatible cloud model for natural long-form and conversational translation, so memory-constrained services such as Render do not need to load a local model. The default configuration uses a Qwen model hosted by Groq.
 
-將各語言文字頻道放在同一個 Discord 分類後，由頻道管理員建立同步群組：
+The `/translate` command interface is localized in English, Traditional Chinese, and Korean. Discord automatically displays the version matching each user's Discord language setting.
+
+To synchronize language channels, place them in the same Discord category and have a channel manager create a translation group:
 
 ```text
-/translate group category:翻譯頻道 chinese-channel:#中文 english-channel:#english japanese-channel:#日本語 korean-channel:#한국어
+/translate group category:translation-channels chinese-channel:#chinese english-channel:#english japanese-channel:#japanese korean-channel:#korean
 /translate status
 /translate ungroup
 ```
 
-至少選擇兩個頻道。群組中任何一個頻道有人發言時，bot 會翻譯並同步到其他語言頻道。也可以用 `/translate link` 保留只有兩個頻道的簡單雙向配對。
+Select at least two channels. When someone posts in any channel in the group, the bot translates the message and synchronizes it to the other language channels. Use `/translate link` instead for a simple two-channel, two-way translation link.
 
-多語言群組會在同一次 AI 請求中產生所有目標語言；例如中文同步到英、日、韓仍只計為 1 次 API 請求。預設會將請求間隔至少 2.1 秒；可依供應商限制用 `AI_MIN_REQUEST_INTERVAL_MS` 調整。
+A multilingual group generates every target language in one AI request. For example, translating Chinese into English, Japanese, and Korean still uses only one API request. Requests are spaced at least 2.1 seconds apart by default; adjust `AI_MIN_REQUEST_INTERVAL_MS` to match your provider's limits.
 
-任何訊息也可以使用 **右鍵 → Apps → 翻譯這則訊息**：
+You can also translate any message with **right-click → Apps → Translate this message**:
 
-- 群組頻道可選擇任一支援的目標語言。
-- 雙向配對頻道會自動翻成另一種配對語言。
-- 未綁定或無法判斷語言時，會顯示只有操作者看得到的目標語言選單。
-- 可用 `/translate config input-language:繁體中文 output-language:日文` 儲存個人預設語言；之後右鍵翻譯會直接使用預設輸出語言。
-- 右鍵手動翻譯不需要 Message Content Intent。
+- In a translation-group channel, you can choose any supported target language.
+- In a two-way linked channel, the bot automatically uses the other channel's language.
+- In an unlinked channel, or when the language is ambiguous, the bot shows a private target-language menu.
+- Use `/translate config input-language:Traditional Chinese output-language:Japanese` to save personal defaults. Message context-menu translation uses the saved target language.
+- Manual context-menu translation does not require Message Content Intent.
 
-也可以輸入指令，先翻譯自己的文字再公開送到目前頻道：
+To translate your own text before posting it publicly:
 
 ```text
-/translate send message:大家好
+/translate send message:Hello everyone
 ```
 
-`send` 會使用個人預設的輸入與輸出語言，並透過 Webhook 沿用下指令者的伺服器暱稱與頭像公開送出。每次使用時仍可另外選擇 `input-language` 或 `output-language` 覆寫預設；若未設定輸入語言則自動偵測，若尚未設定輸出語言則必須在該次指令選擇。Bot 需要目前頻道的「管理 Webhook」權限。
+`send` uses your personal source and target defaults, then posts through a webhook with your server nickname and avatar. You can override either default with `input-language` or `output-language` each time. If no source is configured, the bot auto-detects it. If no target is configured, you must select one in the command. The bot needs the **Manage Webhooks** permission in the current channel.
 
-頻道自動翻譯預設關閉。要啟用時：
+Automatic channel translation is disabled by default. To enable it:
 
-1. 到 Discord Developer Portal → application → **Bot**。
-2. 開啟 **MESSAGE CONTENT INTENT**。
-3. 在 `.env` 設定 `TRANSLATION_AUTO_ENABLED=true`。
-4. 設定任一 OpenAI 相容 AI 服務的金鑰、模型及 API base URL。以下為 Groq 範例：
+1. Open Discord Developer Portal → your application → **Bot**.
+2. Enable **MESSAGE CONTENT INTENT**.
+3. Set `TRANSLATION_AUTO_ENABLED=true` in `.env`.
+4. Configure the API key, model, and base URL for an OpenAI-compatible provider. For example, with Groq:
 
 ```env
 AI_API_KEY=...
 AI_MODEL=qwen/qwen3.8-27b
 AI_BASE_URL=https://api.groq.com/openai/v1
 AI_PROVIDER_NAME=groq
-# Groq on-demand 方案的單次輸出上限較低；一般 Discord 訊息使用 900 即可
+# Groq on-demand has a relatively small per-request output limit; 900 is enough for typical Discord messages.
 AI_MAX_OUTPUT_TOKENS=900
 ```
 
-啟用前應告知伺服器成員訊息會送往第三方服務。`AI_API_KEY` 不可 commit 到 Git。金鑰必須與 `AI_BASE_URL` 的服務相符，模型名稱也必須是該服務可用的模型；目前不會自動切換備援服務。自動翻譯會在目標頻道使用 Webhook 顯示原發言者的暱稱與頭像，因此 Bot 另需要「管理 Webhook」權限。
+Tell server members that their messages will be sent to a third-party service before enabling automatic translation. Never commit `AI_API_KEY`. The key must belong to the service configured by `AI_BASE_URL`, and the model must be available from that provider; the bot does not automatically switch to a fallback provider. Automatic translation uses webhooks to preserve the original sender's nickname and avatar, so the bot also needs **Manage Webhooks** permission.
 
 ## 4. Docker 自架
 

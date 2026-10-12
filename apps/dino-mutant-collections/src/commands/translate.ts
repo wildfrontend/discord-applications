@@ -23,6 +23,10 @@ import { sendTranslationWebhook } from '../translation/webhook.js'
 const askEveryTimeValue = 'ask'
 const autoDetectValue = 'auto'
 
+function localizations(chinese: string, korean: string) {
+  return { 'zh-TW': chinese, ko: korean }
+}
+
 function selectedLanguage(value: string | null): TranslationLanguage | null {
   return value && isTranslationLanguage(value) ? value : null
 }
@@ -37,56 +41,115 @@ function bindingLabel(languageA: string, languageB: string): string {
 export default defineCommand({
   data: new SlashCommandBuilder()
     .setName('translate')
-    .setDescription('翻譯訊息，或設定多語言頻道的自動翻譯')
+    .setNameLocalizations(localizations('翻譯', '번역'))
+    .setDescription('Translate messages or configure channel translation')
+    .setDescriptionLocalizations(
+      localizations(
+        '翻譯訊息，或設定多語言頻道的自動翻譯',
+        '메시지를 번역하거나 채널 번역을 설정합니다',
+      ),
+    )
     .setDMPermission(false)
     .addSubcommand((subcommand) =>
       subcommand
         .setName('send')
-        .setDescription('將輸入內容翻譯後公開傳送到目前頻道')
+        .setNameLocalizations(localizations('發送', '전송'))
+        .setDescription('Translate your text and send it to this channel')
+        .setDescriptionLocalizations(
+          localizations(
+            '將輸入內容翻譯後公開傳送到目前頻道',
+            '입력한 내용을 번역하여 현재 채널에 전송합니다',
+          ),
+        )
         .addStringOption((option) =>
           option
             .setName('message')
-            .setDescription('要翻譯並送出的內容')
+            .setNameLocalizations(localizations('訊息', '메시지'))
+            .setDescription('Text to translate and send')
+            .setDescriptionLocalizations(
+              localizations('要翻譯並送出的內容', '번역하여 보낼 내용'),
+            )
             .setRequired(true)
             .setMaxLength(4_000),
         )
         .addStringOption((option) =>
           option
             .setName('input-language')
-            .setDescription('原文語言；未選擇時使用個人預設或自動偵測')
+            .setNameLocalizations(localizations('輸入語言', '입력언어'))
+            .setDescription('Source language; defaults to your setting or auto')
+            .setDescriptionLocalizations(
+              localizations(
+                '原文語言；未選擇時使用個人預設或自動偵測',
+                '원문 언어. 생략하면 개인 기본값 또는 자동 감지를 사용합니다',
+              ),
+            )
             .addChoices(
-              { name: '自動偵測', value: autoDetectValue },
+              {
+                name: 'Auto-detect',
+                name_localizations: localizations('自動偵測', '자동 감지'),
+                value: autoDetectValue,
+              },
               ...languageChoices,
             ),
         )
         .addStringOption((option) =>
           option
             .setName('output-language')
-            .setDescription('譯文語言；未選擇時使用個人預設')
+            .setNameLocalizations(localizations('輸出語言', '출력언어'))
+            .setDescription('Target language; defaults to your setting')
+            .setDescriptionLocalizations(
+              localizations(
+                '譯文語言；未選擇時使用個人預設',
+                '번역 언어. 생략하면 개인 기본값을 사용합니다',
+              ),
+            )
             .addChoices(...languageChoices),
         ),
     )
     .addSubcommand((subcommand) =>
       subcommand
         .setName('config')
-        .setDescription('設定個人的預設輸入與輸出語言')
+        .setNameLocalizations(localizations('設定', '설정'))
+        .setDescription('Set your default source and target languages')
+        .setDescriptionLocalizations(
+          localizations(
+            '設定個人的預設輸入與輸出語言',
+            '개인 기본 입력 및 출력 언어를 설정합니다',
+          ),
+        )
         .addStringOption((option) =>
           option
             .setName('input-language')
-            .setDescription('你的預設輸入語言')
+            .setNameLocalizations(localizations('輸入語言', '입력언어'))
+            .setDescription('Your default source language')
+            .setDescriptionLocalizations(
+              localizations('你的預設輸入語言', '기본 입력 언어'),
+            )
             .setRequired(true)
             .addChoices(
-              { name: '自動偵測', value: autoDetectValue },
+              {
+                name: 'Auto-detect',
+                name_localizations: localizations('自動偵測', '자동 감지'),
+                value: autoDetectValue,
+              },
               ...languageChoices,
             ),
         )
         .addStringOption((option) =>
           option
             .setName('output-language')
-            .setDescription('你的預設輸出語言；也可恢復為每次選擇')
+            .setNameLocalizations(localizations('輸出語言', '출력언어'))
+            .setDescription('Your default target language')
+            .setDescriptionLocalizations(
+              localizations(
+                '你的預設輸出語言；也可恢復為每次選擇',
+                '기본 출력 언어. 매번 선택하도록 변경할 수도 있습니다',
+              ),
+            )
             .setRequired(true)
             .addChoices(...languageChoices, {
-              name: '每次手動選擇',
+              name: 'Choose every time',
+              name_localizations: localizations('每次手動選擇', '매번 선택'),
               value: askEveryTimeValue,
             }),
         ),
@@ -94,75 +157,156 @@ export default defineCommand({
     .addSubcommand((subcommand) =>
       subcommand
         .setName('group')
-        .setDescription('將同一分類中的多個語言頻道設為同步翻譯群組')
+        .setNameLocalizations(localizations('群組', '그룹'))
+        .setDescription('Create a translation group from category channels')
+        .setDescriptionLocalizations(
+          localizations(
+            '將同一分類中的多個語言頻道設為同步翻譯群組',
+            '같은 카테고리의 언어 채널로 번역 그룹을 만듭니다',
+          ),
+        )
         .addChannelOption((option) =>
           option
             .setName('category')
-            .setDescription('要設定多語言同步的分類')
+            .setNameLocalizations(localizations('分類', '카테고리'))
+            .setDescription('Category containing the language channels')
+            .setDescriptionLocalizations(
+              localizations(
+                '要設定多語言同步的分類',
+                '언어 채널이 포함된 카테고리',
+              ),
+            )
             .addChannelTypes(ChannelType.GuildCategory)
             .setRequired(true),
         )
         .addChannelOption((option) =>
           option
             .setName('chinese-channel')
-            .setDescription('繁體中文頻道')
+            .setNameLocalizations(localizations('中文頻道', '중국어채널'))
+            .setDescription('Traditional Chinese channel')
+            .setDescriptionLocalizations(
+              localizations('繁體中文頻道', '중국어(번체) 채널'),
+            )
             .addChannelTypes(ChannelType.GuildText),
         )
         .addChannelOption((option) =>
           option
             .setName('english-channel')
-            .setDescription('英文頻道')
+            .setNameLocalizations(localizations('英文頻道', '영어채널'))
+            .setDescription('English channel')
+            .setDescriptionLocalizations(localizations('英文頻道', '영어 채널'))
             .addChannelTypes(ChannelType.GuildText),
         )
         .addChannelOption((option) =>
           option
             .setName('japanese-channel')
-            .setDescription('日文頻道')
+            .setNameLocalizations(localizations('日文頻道', '일본어채널'))
+            .setDescription('Japanese channel')
+            .setDescriptionLocalizations(
+              localizations('日文頻道', '일본어 채널'),
+            )
             .addChannelTypes(ChannelType.GuildText),
         )
         .addChannelOption((option) =>
           option
             .setName('korean-channel')
-            .setDescription('韓文頻道')
+            .setNameLocalizations(localizations('韓文頻道', '한국어채널'))
+            .setDescription('Korean channel')
+            .setDescriptionLocalizations(
+              localizations('韓文頻道', '한국어 채널'),
+            )
             .addChannelTypes(ChannelType.GuildText),
         ),
     )
     .addSubcommand((subcommand) =>
       subcommand
         .setName('link')
-        .setDescription('將目前頻道與另一個語言頻道雙向連結')
+        .setNameLocalizations(localizations('連結', '연결'))
+        .setDescription('Link this channel with another language channel')
+        .setDescriptionLocalizations(
+          localizations(
+            '將目前頻道與另一個語言頻道雙向連結',
+            '현재 채널을 다른 언어 채널과 양방향으로 연결합니다',
+          ),
+        )
         .addChannelOption((option) =>
           option
             .setName('channel')
-            .setDescription('要連結的另一個文字頻道')
+            .setNameLocalizations(localizations('頻道', '채널'))
+            .setDescription('The other text channel to link')
+            .setDescriptionLocalizations(
+              localizations(
+                '要連結的另一個文字頻道',
+                '연결할 다른 텍스트 채널',
+              ),
+            )
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(true),
         )
         .addStringOption((option) =>
           option
             .setName('current-language')
-            .setDescription('目前頻道使用的語言')
+            .setNameLocalizations(localizations('目前語言', '현재언어'))
+            .setDescription('Language used in the current channel')
+            .setDescriptionLocalizations(
+              localizations(
+                '目前頻道使用的語言',
+                '현재 채널에서 사용하는 언어',
+              ),
+            )
             .setRequired(true)
             .addChoices(...languageChoices),
         )
         .addStringOption((option) =>
           option
             .setName('linked-language')
-            .setDescription('另一個頻道使用的語言')
+            .setNameLocalizations(localizations('連結語言', '연결언어'))
+            .setDescription('Language used in the linked channel')
+            .setDescriptionLocalizations(
+              localizations(
+                '另一個頻道使用的語言',
+                '연결된 채널에서 사용하는 언어',
+              ),
+            )
             .setRequired(true)
             .addChoices(...languageChoices),
         ),
     )
     .addSubcommand((subcommand) =>
-      subcommand.setName('status').setDescription('查看目前頻道的語言綁定'),
+      subcommand
+        .setName('status')
+        .setNameLocalizations(localizations('狀態', '상태'))
+        .setDescription('Show channel translation and personal defaults')
+        .setDescriptionLocalizations(
+          localizations(
+            '查看目前頻道的語言綁定與個人預設',
+            '채널 번역 설정과 개인 기본값을 표시합니다',
+          ),
+        ),
     )
     .addSubcommand((subcommand) =>
-      subcommand.setName('unlink').setDescription('移除目前頻道的雙向翻譯連結'),
+      subcommand
+        .setName('unlink')
+        .setNameLocalizations(localizations('解除連結', '연결해제'))
+        .setDescription('Remove the two-way translation link')
+        .setDescriptionLocalizations(
+          localizations(
+            '移除目前頻道的雙向翻譯連結',
+            '현재 채널의 양방향 번역 연결을 제거합니다',
+          ),
+        ),
     )
     .addSubcommand((subcommand) =>
       subcommand
         .setName('ungroup')
-        .setDescription('移除目前分類的多語言翻譯群組'),
+        .setNameLocalizations(localizations('解除群組', '그룹해제'))
+        .setDescription('Remove the translation group for this category')
+        .setDescriptionLocalizations(
+          localizations(
+            '移除目前分類的多語言翻譯群組',
+            '현재 카테고리의 다국어 번역 그룹을 제거합니다',
+          ),
+        ),
     )
     .toJSON(),
 
