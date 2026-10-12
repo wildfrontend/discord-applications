@@ -23,6 +23,7 @@ export default defineMessageCommand({
     .setName('Translate this message')
     .setNameLocalizations({
       'zh-TW': '翻譯這則訊息',
+      ja: 'このメッセージを翻訳',
       ko: '이 메시지 번역',
     })
     .setType(ApplicationCommandType.Message)
