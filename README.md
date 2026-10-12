@@ -63,7 +63,7 @@ pnpm --filter @dc/dino-mutant-collections dev               # 開發模式（wat
 
 The bot supports Traditional Chinese, English, Japanese, and Korean. It uses an OpenAI-compatible cloud model for natural long-form and conversational translation, so memory-constrained services such as Render do not need to load a local model. The default configuration uses a Qwen model hosted by Groq.
 
-The `/translate` command interface is localized in English, Traditional Chinese, and Korean. Discord automatically displays the version matching each user's Discord language setting.
+The `/translate` command interface is localized in English, Traditional Chinese, Japanese, and Korean. Discord automatically displays the version matching each user's Discord language setting.
 
 To synchronize language channels, place them in the same Discord category and have a channel manager create a translation group:
 

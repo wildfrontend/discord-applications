@@ -11,18 +11,23 @@ export const languageNames: Record<TranslationLanguage, string> = {
 
 const languageChoiceNames: Record<
   TranslationLanguage,
-  { english: string; korean: string }
+  { english: string; japanese: string; korean: string }
 > = {
-  zt: { english: 'Traditional Chinese', korean: '중국어(번체)' },
-  en: { english: 'English', korean: '영어' },
-  ja: { english: 'Japanese', korean: '일본어' },
-  ko: { english: 'Korean', korean: '한국어' },
+  zt: {
+    english: 'Traditional Chinese',
+    japanese: '繁体字中国語',
+    korean: '중국어(번체)',
+  },
+  en: { english: 'English', japanese: '英語', korean: '영어' },
+  ja: { english: 'Japanese', japanese: '日本語', korean: '일본어' },
+  ko: { english: 'Korean', japanese: '韓国語', korean: '한국어' },
 }
 
 export const languageChoices = supportedLanguages.map((value) => ({
   name: languageChoiceNames[value].english,
   name_localizations: {
     'zh-TW': languageNames[value],
+    ja: languageChoiceNames[value].japanese,
     ko: languageChoiceNames[value].korean,
   },
   value,
