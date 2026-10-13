@@ -1,9 +1,11 @@
 import type { Client } from 'discord.js'
+import { sendDueEventReminders } from './reminders.js'
 import { createNextOccurrence, recurrenceMilliseconds } from './service.js'
-import { recurringEventStore } from './store.js'
+import { eventReminderStore, recurringEventStore } from './store.js'
 
 const CHECK_INTERVAL_MS = 1_000
 const CACHE_REFRESH_INTERVAL_MS = 5 * 60_000
+const REMINDER_CHECK_INTERVAL_MS = 30_000
 
 async function refreshScheduledEventCaches(client: Client): Promise<void> {
   const results = await Promise.allSettled(
@@ -14,6 +16,27 @@ async function refreshScheduledEventCaches(client: Client): Promise<void> {
     console.error(
       `[events] Failed to refresh ${failures.length} guild event cache(s)`,
     )
+  }
+  // 也補上舊排程和來源活動；更新時間時不會清除已發送紀錄。
+  for (const schedule of await recurringEventStore.list()) {
+    const events = client.guilds.cache.get(schedule.guildId)?.scheduledEvents
+      .cache
+    for (const id of new Set([
+      schedule.sourceEventId,
+      schedule.latestEventId,
+    ])) {
+      const event = events?.get(id)
+      if (
+        event?.scheduledStartTimestamp &&
+        event.scheduledStartTimestamp > Date.now()
+      ) {
+        await eventReminderStore.track(
+          schedule.id,
+          id,
+          event.scheduledStartTimestamp,
+        )
+      }
+    }
   }
 }
 
@@ -47,11 +70,16 @@ async function runScheduler(client: Client): Promise<void> {
 
 export function startRecurringEventScheduler(client: Client): () => void {
   let running = false
+  let nextReminderCheck = 0
   const check = async () => {
     if (running) return
     running = true
     try {
       await runScheduler(client)
+      if (Date.now() >= nextReminderCheck) {
+        nextReminderCheck = Date.now() + REMINDER_CHECK_INTERVAL_MS
+        await sendDueEventReminders(client)
+      }
     } catch (error) {
       console.error('[events] Scheduler failed:', error)
     } finally {
@@ -59,9 +87,13 @@ export function startRecurringEventScheduler(client: Client): () => void {
     }
   }
 
-  void refreshScheduledEventCaches(client).then(check)
+  const refresh = () =>
+    refreshScheduledEventCaches(client).catch((error) => {
+      console.error('[events] Failed to refresh reminders:', error)
+    })
+  void refresh().then(check)
   const cacheTimer = setInterval(
-    () => void refreshScheduledEventCaches(client),
+    () => void refresh(),
     CACHE_REFRESH_INTERVAL_MS,
   )
   cacheTimer.unref()

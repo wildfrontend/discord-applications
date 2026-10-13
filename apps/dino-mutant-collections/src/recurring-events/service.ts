@@ -1,10 +1,9 @@
 import {
   type Client,
-  escapeMarkdown,
   type GuildScheduledEvent,
   GuildScheduledEventEntityType,
 } from 'discord.js'
-import { eventNotificationStore, recurringEventStore } from './store.js'
+import { eventReminderStore, recurringEventStore } from './store.js'
 import type { RecurrenceUnit, RecurringEventSchedule } from './types.js'
 
 export function recurrenceMilliseconds(
@@ -64,30 +63,6 @@ export function buildSchedule(
   }
 }
 
-async function sendOccurrenceNotification(
-  client: Client,
-  event: GuildScheduledEvent,
-): Promise<void> {
-  const settings = await eventNotificationStore.get(event.guildId)
-  if (!settings) return
-
-  const channel = await client.channels.fetch(settings.channelId)
-  if (!channel?.isSendable()) {
-    throw new Error(
-      `通知頻道 ${settings.channelId} 不存在或 Bot 無法傳送訊息。`,
-    )
-  }
-
-  const startTimestamp = event.scheduledStartTimestamp
-  const time = startTimestamp
-    ? `<t:${Math.floor(startTimestamp / 1000)}:F>（<t:${Math.floor(startTimestamp / 1000)}:R>）`
-    : '尚未設定'
-  await channel.send({
-    content: `**新活動已排定｜${escapeMarkdown(event.name)}**\n時間：${time}\n${event.url}`,
-    allowedMentions: { parse: [] },
-  })
-}
-
 export async function createNextOccurrence(
   client: Client,
   schedule: RecurringEventSchedule,
@@ -136,14 +111,13 @@ export async function createNextOccurrence(
           : new Date(startTimestamp + template.durationMs),
       reason: `Custom recurrence ${schedule.id}`,
     })
-    try {
-      await sendOccurrenceNotification(client, created)
-    } catch (error) {
-      const details = error instanceof Error ? error.message : String(error)
-      console.error(
-        `[events] Failed to notify next occurrence ${created.id}: ${details}`,
-      )
-    }
+  }
+  if (created.scheduledStartTimestamp !== null) {
+    await eventReminderStore.track(
+      schedule.id,
+      created.id,
+      created.scheduledStartTimestamp,
+    )
   }
 
   return {
@@ -163,6 +137,13 @@ export async function createRecurringSchedule(
   const schedule = buildSchedule(source, createdBy, interval, unit)
   await recurringEventStore.add(schedule)
   try {
+    if (source.scheduledStartTimestamp !== null) {
+      await eventReminderStore.track(
+        schedule.id,
+        source.id,
+        source.scheduledStartTimestamp,
+      )
+    }
     const withNextOccurrence = await createNextOccurrence(client, schedule)
     await recurringEventStore.update(withNextOccurrence)
     return withNextOccurrence

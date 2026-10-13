@@ -4,6 +4,7 @@ import {
   createDatabase,
   databaseDriver,
 } from '../database.js'
+import { validateReminderTemplate } from './message-template.js'
 import { dataFile } from './storage.js'
 import type { RecurrenceUnit, RecurringEventSchedule } from './types.js'
 
@@ -23,6 +24,10 @@ interface ScheduleRow {
 export interface EventNotificationSettings {
   guildId: string
   channelId: string
+  roleId: string | null
+  messageTemplate: string | null
+  remindBeforeMinutes: number
+  enabled: boolean
   updatedBy: string
   updatedAt: string
 }
@@ -30,6 +35,10 @@ export interface EventNotificationSettings {
 interface NotificationSettingsRow {
   guild_id: string
   channel_id: string
+  role_id: string | null
+  message_template: string | null
+  remind_before_minutes: number
+  enabled?: number
   updated_by: string
   updated_at: string
 }
@@ -67,6 +76,58 @@ await database.batch(
   ],
   'write',
 )
+
+// 舊版共用通知設定沿用頻道，改為預設提前 30 分鐘提醒。
+const notificationColumns = await database.execute(
+  'PRAGMA table_info(event_notification_settings)',
+)
+for (const [name, definition] of [
+  ['role_id', 'TEXT'],
+  ['message_template', 'TEXT'],
+  ['remind_before_minutes', 'INTEGER NOT NULL DEFAULT 30'],
+]) {
+  if (!notificationColumns.rows.some((row) => row.name === name)) {
+    await database.execute(
+      `ALTER TABLE event_notification_settings ADD COLUMN ${name} ${definition}`,
+    )
+  }
+}
+await database.batch(
+  [
+    `CREATE TABLE IF NOT EXISTS event_schedule_notifications (
+      schedule_id TEXT PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      role_id TEXT,
+      message_template TEXT,
+      remind_before_minutes INTEGER NOT NULL DEFAULT 30,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      updated_by TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS event_reminders (
+      schedule_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      start_at INTEGER NOT NULL,
+      sent_at TEXT,
+      PRIMARY KEY (schedule_id, event_id)
+    )`,
+  ],
+  'write',
+)
+
+const scheduleNotificationColumns = await database.execute(
+  'PRAGMA table_info(event_schedule_notifications)',
+)
+if (
+  !scheduleNotificationColumns.rows.some(
+    (row) => row.name === 'message_template',
+  )
+) {
+  await database.execute(
+    'ALTER TABLE event_schedule_notifications ADD COLUMN message_template TEXT',
+  )
+}
 
 const schemaResult = await database.execute(
   `SELECT sql FROM sqlite_master
@@ -222,55 +283,116 @@ export const recurringEventStore = {
   },
 
   async remove(guildId: string, id: string): Promise<boolean> {
-    const result = await database.execute({
-      sql: 'DELETE FROM recurring_events WHERE guild_id = ? AND id = ?',
-      args: [guildId, id],
-    })
-    return result.rowsAffected > 0
+    const results = await database.batch(
+      [
+        {
+          sql: `DELETE FROM event_reminders WHERE schedule_id IN
+          (SELECT id FROM recurring_events WHERE guild_id = ? AND id = ?)`,
+          args: [guildId, id],
+        },
+        {
+          sql: 'DELETE FROM event_schedule_notifications WHERE guild_id = ? AND schedule_id = ?',
+          args: [guildId, id],
+        },
+        {
+          sql: 'DELETE FROM recurring_events WHERE guild_id = ? AND id = ?',
+          args: [guildId, id],
+        },
+      ],
+      'write',
+    )
+    return results[2].rowsAffected > 0
   },
 }
 
 export const eventNotificationStore = {
-  async get(guildId: string): Promise<EventNotificationSettings | null> {
+  async get(
+    guildId: string,
+    scheduleId?: string,
+  ): Promise<EventNotificationSettings | null> {
     const result = await database.execute({
-      sql: `SELECT guild_id, channel_id, updated_by, updated_at
+      sql: scheduleId
+        ? `SELECT * FROM event_schedule_notifications WHERE guild_id = ? AND schedule_id = ?`
+        : `SELECT guild_id, channel_id, role_id, message_template, remind_before_minutes, updated_by, updated_at
         FROM event_notification_settings
         WHERE guild_id = ?`,
-      args: [guildId],
+      args: scheduleId ? [guildId, scheduleId] : [guildId],
     })
     const row = result.rows[0] as unknown as NotificationSettingsRow | undefined
     return row
       ? {
           guildId: row.guild_id,
           channelId: row.channel_id,
+          roleId: row.role_id,
+          messageTemplate: row.message_template,
+          remindBeforeMinutes: row.remind_before_minutes,
+          enabled: row.enabled !== 0,
           updatedBy: row.updated_by,
           updatedAt: row.updated_at,
         }
       : null
   },
 
+  async resolve(
+    guildId: string,
+    scheduleId: string,
+  ): Promise<EventNotificationSettings | null> {
+    return (await this.get(guildId, scheduleId)) ?? this.get(guildId)
+  },
+
   async set(
     guildId: string,
     channelId: string,
     updatedBy: string,
+    options: {
+      scheduleId?: string
+      roleId?: string | null
+      messageTemplate?: string | null
+      remindBeforeMinutes?: number
+      enabled?: boolean
+    } = {},
   ): Promise<EventNotificationSettings> {
     const settings: EventNotificationSettings = {
       guildId,
       channelId,
+      roleId: options.roleId ?? null,
+      messageTemplate: options.messageTemplate ?? null,
+      remindBeforeMinutes: options.remindBeforeMinutes ?? 30,
+      enabled: options.enabled ?? true,
       updatedBy,
       updatedAt: new Date().toISOString(),
     }
+    if (settings.messageTemplate !== null) {
+      validateReminderTemplate(settings.messageTemplate, settings.roleId)
+    }
     await database.execute({
-      sql: `INSERT INTO event_notification_settings (
-          guild_id, channel_id, updated_by, updated_at
-        ) VALUES (?, ?, ?, ?)
+      sql: options.scheduleId
+        ? `INSERT INTO event_schedule_notifications (
+          schedule_id, guild_id, channel_id, role_id, message_template, remind_before_minutes, enabled, updated_by, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(schedule_id) DO UPDATE SET
+          channel_id = excluded.channel_id, role_id = excluded.role_id,
+          message_template = excluded.message_template,
+          remind_before_minutes = excluded.remind_before_minutes, enabled = excluded.enabled,
+          updated_by = excluded.updated_by, updated_at = excluded.updated_at`
+        : `INSERT INTO event_notification_settings (
+          guild_id, channel_id, role_id, message_template, remind_before_minutes, updated_by, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id) DO UPDATE SET
           channel_id = excluded.channel_id,
+          role_id = excluded.role_id,
+          message_template = excluded.message_template,
+          remind_before_minutes = excluded.remind_before_minutes,
           updated_by = excluded.updated_by,
           updated_at = excluded.updated_at`,
       args: [
+        ...(options.scheduleId ? [options.scheduleId] : []),
         settings.guildId,
         settings.channelId,
+        settings.roleId,
+        settings.messageTemplate,
+        settings.remindBeforeMinutes,
+        ...(options.scheduleId ? [Number(settings.enabled)] : []),
         settings.updatedBy,
         settings.updatedAt,
       ],
@@ -278,11 +400,57 @@ export const eventNotificationStore = {
     return settings
   },
 
-  async remove(guildId: string): Promise<boolean> {
+  async remove(guildId: string, scheduleId?: string): Promise<boolean> {
     const result = await database.execute({
-      sql: 'DELETE FROM event_notification_settings WHERE guild_id = ?',
-      args: [guildId],
+      sql: scheduleId
+        ? 'DELETE FROM event_schedule_notifications WHERE guild_id = ? AND schedule_id = ?'
+        : 'DELETE FROM event_notification_settings WHERE guild_id = ?',
+      args: scheduleId ? [guildId, scheduleId] : [guildId],
     })
     return result.rowsAffected > 0
+  },
+}
+
+export const eventReminderStore = {
+  async track(
+    scheduleId: string,
+    eventId: string,
+    startAt: number,
+  ): Promise<void> {
+    await database.execute({
+      sql: `INSERT INTO event_reminders (schedule_id, event_id, start_at)
+        VALUES (?, ?, ?) ON CONFLICT(schedule_id, event_id)
+        DO UPDATE SET start_at = excluded.start_at`,
+      args: [scheduleId, eventId, startAt],
+    })
+  },
+
+  async pending(now: number): Promise<
+    Array<{
+      scheduleId: string
+      guildId: string
+      eventId: string
+      startAt: number
+    }>
+  > {
+    const result = await database.execute({
+      sql: `SELECT r.schedule_id, s.guild_id, r.event_id, r.start_at
+        FROM event_reminders r JOIN recurring_events s ON s.id = r.schedule_id
+        WHERE r.sent_at IS NULL AND r.start_at > ?`,
+      args: [now],
+    })
+    return result.rows.map((row) => ({
+      scheduleId: String(row.schedule_id),
+      guildId: String(row.guild_id),
+      eventId: String(row.event_id),
+      startAt: Number(row.start_at),
+    }))
+  },
+
+  async complete(scheduleId: string, eventId: string): Promise<void> {
+    await database.execute({
+      sql: 'UPDATE event_reminders SET sent_at = ? WHERE schedule_id = ? AND event_id = ?',
+      args: [new Date().toISOString(), scheduleId, eventId],
+    })
   },
 }
