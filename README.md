@@ -125,8 +125,32 @@ Choose the event and set the interval. The bot keeps one future occurrence sched
 
 - `/event list` — list recurring schedules.
 - `/event remove` — stop a schedule without deleting existing events.
-- `/event notify channel:#event-notifications` — set the notification channel.
-- `/event notify-disable` — disable event notifications.
+- `/event notify channel:#event-notifications before:30 role:@members` — configure shared reminders before an event starts. `before` is in minutes (1–10080, default 30); omit `role` to send without a mention.
+- `/event notify schedule:Activity-A channel:#activity-a before:60 role:@activity-a-members` — set a separate reminder channel, lead time, and role for a recurring schedule selected from autocomplete. Schedules without individual settings inherit the shared configuration.
+- `/event notify-disable schedule:Activity-A` — disable only that schedule's reminders. Omit `schedule` to disable shared reminders; individually configured reminders remain enabled.
+- `/event notify-default schedule:Activity-A` — restore a schedule to the shared configuration.
+
+Reminders cover both the original selected event and subsequent occurrences. The bot checks approximately every 30 seconds and sends the event's start time and link when it enters the reminder window, rather than announcing an event when it is created. If the bot resumes or reminders are configured during that window, it sends on the next check; events that have already started are skipped. Delivery records persist across normal restarts. Changing reminder settings does not resend an already delivered reminder.
+
+Configuring reminders requires **Manage Events**. The bot needs **View Channel** and **Send Messages** in the selected channel. To ping a role, either make it mentionable or grant the bot **Mention Everyone** in that channel. Only the explicitly selected role is allowed to be mentioned.
+
+Use the optional `message` field on `/event notify` to customize the reminder text for a schedule or the shared configuration. The bot previews the saved message privately without pinging anyone. Omit `message` to restore the default text when saving notification settings. Templates support Markdown and literal `\n` for line breaks, with these fields:
+
+| Field | Value |
+| --- | --- |
+| `{name}` | Event name (escaped for Markdown). |
+| `{time}` | Event start time, displayed in each reader's local timezone. |
+| `{relative}` | Relative start time, such as “in 30 minutes”. |
+| `{url}` | Discord event link. |
+| `{role}` | The role selected with `role`, or empty when no role is selected. |
+
+For example, paste this into the `message` field:
+
+```text
+{role}\n🔔 **{name} 即將開始！**\n📅 時間：{time}（{relative}）\n👉 活動連結：{url}\n請大家準備集合！
+```
+
+If a role is selected but `{role}` is omitted from the template, the bot prepends the role mention. Templates can contain up to 1000 characters, and are checked for unsupported fields and expansion beyond Discord's 2000-character message limit. Mentions of other roles, users, `@everyone`, and `@here` in custom text do not ping anyone.
 
 The bot needs **Create Events** and **Manage Events** permissions. Regular members can manage schedules they created; members with **Manage Events** can manage all schedules.
 

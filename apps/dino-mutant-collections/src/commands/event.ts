@@ -7,8 +7,14 @@ import {
   PermissionFlagsBits,
   SlashCommandBuilder,
 } from 'discord.js'
+import {
+  MAX_REMINDER_TEMPLATE_LENGTH,
+  renderReminderMessage,
+  validateReminderTemplate,
+} from '../recurring-events/message-template.js'
 import { createRecurringSchedule } from '../recurring-events/service.js'
 import {
+  type EventNotificationSettings,
   eventNotificationStore,
   recurringEventStore,
 } from '../recurring-events/store.js'
@@ -31,6 +37,11 @@ function relativeStartLabel(timestamp: number | null): string {
     Math.round(hours / 24),
     'day',
   )
+}
+
+function notificationLabel(settings: EventNotificationSettings | null): string {
+  if (!settings?.enabled) return '關閉'
+  return `<#${settings.channelId}>，提前 ${settings.remindBeforeMinutes} 分鐘${settings.roleId ? `，標註 <@&${settings.roleId}>` : '，不標註身分組'}，${settings.messageTemplate ? '自訂訊息樣板' : '預設訊息樣板'}`
 }
 
 export default defineCommand({
@@ -77,22 +88,66 @@ export default defineCommand({
     .addSubcommand((subcommand) =>
       subcommand
         .setName('notify')
-        .setDescription('設定循環活動建立後的通知頻道')
+        .setDescription('設定活動開始前的提醒頻道、身分組與時間')
         .addChannelOption((option) =>
           option
             .setName('channel')
-            .setDescription('新活動建立時要發送通知的頻道')
+            .setDescription('活動開始前要發送提醒的頻道')
             .setRequired(true)
             .addChannelTypes(
               ChannelType.GuildText,
               ChannelType.GuildAnnouncement,
             ),
+        )
+        .addStringOption((option) =>
+          option
+            .setName('schedule')
+            .setDescription('指定重複活動；留空則設定伺服器共用提醒')
+            .setAutocomplete(true),
+        )
+        .addRoleOption((option) =>
+          option
+            .setName('role')
+            .setDescription('提醒時要 @ 的身分組；留空則不標註'),
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName('before')
+            .setDescription('提前幾分鐘提醒；預設 30 分鐘')
+            .setMinValue(1)
+            .setMaxValue(10080),
+        )
+        .addStringOption((option) =>
+          option
+            .setName('message')
+            .setDescription(
+              '訊息樣板：{name} {time} {relative} {url} {role}；用 \\n 換行，留空使用預設',
+            )
+            .setMaxLength(MAX_REMINDER_TEMPLATE_LENGTH),
         ),
     )
     .addSubcommand((subcommand) =>
       subcommand
         .setName('notify-disable')
-        .setDescription('關閉循環活動頻道通知'),
+        .setDescription('關閉活動開始前的提醒')
+        .addStringOption((option) =>
+          option
+            .setName('schedule')
+            .setDescription('指定重複活動；留空則關閉共用提醒')
+            .setAutocomplete(true),
+        ),
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('notify-default')
+        .setDescription('讓指定活動恢復使用伺服器共用提醒')
+        .addStringOption((option) =>
+          option
+            .setName('schedule')
+            .setDescription('要恢復共用提醒的重複活動')
+            .setRequired(true)
+            .setAutocomplete(true),
+        ),
     )
     .addSubcommand((subcommand) =>
       subcommand
@@ -201,25 +256,59 @@ export default defineCommand({
 
     const subcommand = interaction.options.getSubcommand()
 
-    if (subcommand === 'notify' || subcommand === 'notify-disable') {
+    if (['notify', 'notify-disable', 'notify-default'].includes(subcommand)) {
       if (
         !interaction.memberPermissions.has(PermissionFlagsBits.ManageEvents)
       ) {
         await interaction.reply({
-          content: '你需要「管理活動」權限才能修改活動通知頻道。',
+          content: '你需要「管理活動」權限才能修改活動提醒。',
           flags: MessageFlags.Ephemeral,
         })
         return
       }
 
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral })
+      const scheduleId = interaction.options.getString('schedule') ?? undefined
+      const schedule = scheduleId
+        ? (await recurringEventStore.list(interaction.guildId)).find(
+            (item) => item.id === scheduleId,
+          )
+        : undefined
+      if (scheduleId && !schedule) {
+        await interaction.editReply(
+          '找不到這個重複排程，請從 schedule 選單選擇活動。',
+        )
+        return
+      }
+
+      if (subcommand === 'notify-default') {
+        if (!scheduleId) {
+          await interaction.editReply('請指定要恢復共用提醒的活動。')
+          return
+        }
+        await eventNotificationStore.remove(interaction.guildId, scheduleId)
+        await interaction.editReply(
+          `「${schedule?.template.name}」已恢復使用伺服器共用提醒。`,
+        )
+        return
+      }
+
       if (subcommand === 'notify-disable') {
-        const removed = await eventNotificationStore.remove(interaction.guildId)
-        await interaction.reply({
-          content: removed
-            ? '已關閉循環活動頻道通知。'
-            : '目前尚未設定活動通知頻道。',
-          flags: MessageFlags.Ephemeral,
-        })
+        if (scheduleId) {
+          await eventNotificationStore.set(
+            interaction.guildId,
+            '',
+            interaction.user.id,
+            { scheduleId, enabled: false },
+          )
+        } else {
+          await eventNotificationStore.remove(interaction.guildId)
+        }
+        await interaction.editReply(
+          schedule
+            ? `已關閉「${schedule.template.name}」的活動提醒。`
+            : '已關閉伺服器共用提醒；活動個別設定的提醒仍會生效。',
+        )
         return
       }
 
@@ -229,13 +318,12 @@ export default defineCommand({
           channel.type !== ChannelType.GuildAnnouncement) ||
         channel.guildId !== interaction.guildId
       ) {
-        await interaction.reply({
-          content: '請選擇這個伺服器內的文字或公告頻道。',
-          flags: MessageFlags.Ephemeral,
-        })
+        await interaction.editReply('請選擇這個伺服器內的文字或公告頻道。')
         return
       }
-      const botMember = interaction.guild.members.me
+      const botMember =
+        interaction.guild.members.me ??
+        (await interaction.guild.members.fetchMe())
       if (
         !botMember ||
         !channel
@@ -245,22 +333,92 @@ export default defineCommand({
             PermissionFlagsBits.SendMessages,
           ])
       ) {
-        await interaction.reply({
-          content: `Bot 在 ${channel} 缺少「查看頻道」或「傳送訊息」權限。`,
-          flags: MessageFlags.Ephemeral,
-        })
+        await interaction.editReply(
+          `Bot 在 ${channel} 缺少「查看頻道」或「傳送訊息」權限。`,
+        )
         return
+      }
+
+      const selectedRole = interaction.options.getRole('role')
+      const role = selectedRole
+        ? await interaction.guild.roles.fetch(selectedRole.id)
+        : null
+      if (selectedRole && (!role || role.id === interaction.guildId)) {
+        await interaction.editReply(
+          '請選擇這個伺服器內的身分組（不支援 @everyone）。',
+        )
+        return
+      }
+      if (
+        role &&
+        !role.mentionable &&
+        !channel
+          .permissionsFor(botMember)
+          .has(PermissionFlagsBits.MentionEveryone)
+      ) {
+        await interaction.editReply(
+          `Bot 無法標註 ${role}；請開啟該身分組的「允許任何人提及」，或授予 Bot 在 ${channel} 的「提及 @everyone、@here 和所有身分組」權限。`,
+        )
+        return
+      }
+
+      const before = interaction.options.getInteger('before') ?? 30
+      if (before < 1 || before > 10080) {
+        await interaction.editReply('提醒時間必須是提前 1 到 10080 分鐘。')
+        return
+      }
+
+      const messageTemplate = interaction.options.getString('message')
+      if (messageTemplate !== null) {
+        try {
+          validateReminderTemplate(messageTemplate, role?.id ?? null)
+        } catch (error) {
+          await interaction.editReply(
+            error instanceof Error ? error.message : '提醒訊息樣板格式錯誤。',
+          )
+          return
+        }
       }
 
       await eventNotificationStore.set(
         interaction.guildId,
         channel.id,
         interaction.user.id,
+        {
+          scheduleId,
+          roleId: role?.id,
+          remindBeforeMinutes: before,
+          messageTemplate,
+        },
       )
-      await interaction.reply({
-        content: `活動通知頻道已設定為 ${channel}；之後 Bot 建立下一場循環活動時會在這裡通知。`,
-        flags: MessageFlags.Ephemeral,
-      })
+      await interaction.editReply(
+        `${schedule ? `「${schedule.template.name}」` : '伺服器共用'}提醒已設定：活動開始前 ${before} 分鐘發送到 ${channel}${role ? `，標註 ${role}` : '，不標註身分組'}。${messageTemplate !== null ? '\n以下為訊息樣板預覽：' : ''}`,
+      )
+      if (messageTemplate !== null) {
+        const sourceEvent = schedule
+          ? await interaction.guild.scheduledEvents
+              .fetch(schedule.latestEventId)
+              .catch(() => null)
+          : null
+        const preview = renderReminderMessage(
+          {
+            name: sourceEvent?.name ?? schedule?.template.name ?? '活動名稱',
+            url:
+              sourceEvent?.url ??
+              `https://discord.com/events/${interaction.guildId}/活動ID`,
+            scheduledStartTimestamp:
+              sourceEvent?.scheduledStartTimestamp ??
+              Date.now() + before * 60_000,
+          },
+          role?.id ?? null,
+          messageTemplate,
+        )
+        await interaction.followUp({
+          content: preview,
+          flags: MessageFlags.Ephemeral,
+          allowedMentions: { parse: [] },
+        })
+      }
       return
     }
 
@@ -342,6 +500,7 @@ export default defineCommand({
     }
 
     if (subcommand === 'list') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral })
       const notification = await eventNotificationStore.get(interaction.guildId)
       const canManageAll = interaction.memberPermissions?.has(
         PermissionFlagsBits.ManageEvents,
@@ -353,23 +512,43 @@ export default defineCommand({
           canManageAll || schedule.createdBy === interaction.user.id,
       )
       if (schedules.length === 0) {
-        await interaction.reply({
-          content: `目前沒有自訂重複活動。\n通知頻道：${notification ? `<#${notification.channelId}>` : '未設定'}`,
-          flags: MessageFlags.Ephemeral,
-        })
+        await interaction.editReply(
+          `目前沒有自訂重複活動。\n共用提醒：${notificationLabel(notification)}`,
+        )
         return
       }
 
-      const content = schedules
-        .map((schedule) => {
-          const timestamp = Math.floor(Date.parse(schedule.nextStartAt) / 1000)
-          return `• ${schedule.template.name}：每 ${schedule.interval} ${unitLabels[schedule.unit]}，下一個尚未建立的場次 <t:${timestamp}:F>`
-        })
-        .join('\n')
-      await interaction.reply({
-        content: `${content}\n通知頻道：${notification ? `<#${notification.channelId}>` : '未設定'}`,
-        flags: MessageFlags.Ephemeral,
-      })
+      const content = (
+        await Promise.all(
+          schedules.map(async (schedule) => {
+            const timestamp = Math.floor(
+              Date.parse(schedule.nextStartAt) / 1000,
+            )
+            const override = await eventNotificationStore.get(
+              interaction.guildId,
+              schedule.id,
+            )
+            return `• ${schedule.template.name}：每 ${schedule.interval} ${unitLabels[schedule.unit]}，下一個尚未建立的場次 <t:${timestamp}:F>\n  提醒：${notificationLabel(override ?? notification)}${override ? '' : '（共用設定）'}`
+          }),
+        )
+      ).join('\n')
+      // 多個活動分段回覆，避免超過 Discord 的單則訊息限制。
+      const chunks: string[] = []
+      let chunk = ''
+      for (const line of `${content}\n共用提醒：${notificationLabel(notification)}`.split(
+        '\n',
+      )) {
+        if (chunk.length + line.length + 1 > 1900) {
+          chunks.push(chunk)
+          chunk = ''
+        }
+        chunk += `${chunk ? '\n' : ''}${line}`
+      }
+      if (chunk) chunks.push(chunk)
+      await interaction.editReply(chunks[0])
+      for (const content of chunks.slice(1)) {
+        await interaction.followUp({ content, flags: MessageFlags.Ephemeral })
+      }
       return
     }
 

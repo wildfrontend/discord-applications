@@ -14,7 +14,8 @@
     "deploy-commands": "tsx --env-file-if-exists=.env src/deploy-commands.ts",
     "deploy-commands:prod": "node --env-file-if-exists=.env dist/deploy-commands.js",
     "invite": "tsx --env-file-if-exists=.env src/invite.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/*.test.ts"
   },
   "devDependencies": {
     "tsx": "^4.23.15"
