@@ -15,6 +15,10 @@ import {
 } from './components.js'
 import { isTranslationLanguage, languageNames } from './languages.js'
 import {
+  translationAttachment,
+  translationPayloads,
+} from './message-payload.js'
+import {
   shouldTranslateMessage,
   translateToLanguage,
   translateToLanguages,
@@ -48,8 +52,10 @@ async function sendTranslatedMessage(
   targetChannelId: string,
   targetLanguage: Parameters<typeof translateToLanguage>[1],
 ): Promise<void> {
-  const translated = await translateToLanguage(message.content, targetLanguage)
-  await sendTranslatedText(message, targetChannelId, translated.text)
+  const text = shouldTranslateMessage(message.content)
+    ? (await translateToLanguage(message.content, targetLanguage)).text
+    : message.content
+  await sendTranslatedText(message, targetChannelId, text)
 }
 
 async function sendTranslatedText(
@@ -61,35 +67,38 @@ async function sendTranslatedText(
   if (targetChannel?.type !== ChannelType.GuildText) {
     throw new Error(`目標頻道 ${targetChannelId} 不存在或 Bot 無法傳送訊息。`)
   }
-  const sourceLink = `\n-# [查看原訊息](${message.url})`
-  const available = 2000 - sourceLink.length
-  const content =
-    translatedText.length <= available
-      ? translatedText
-      : `${translatedText.slice(0, Math.max(0, available - 1))}…`
-  try {
-    const username = (
-      message.member?.displayName ?? message.author.displayName
-    ).slice(0, 80)
-    const avatarURL =
-      message.member?.displayAvatarURL({ extension: 'png', size: 128 }) ??
-      message.author.displayAvatarURL({ extension: 'png', size: 128 })
-    await sendTranslationWebhook(targetChannel, message.client.user.id, {
-      content: `${content}${sourceLink}`,
-      username,
-      avatarURL,
-    })
-  } catch (error) {
-    const author = escapeMarkdown(
-      message.member?.displayName ?? message.author.displayName,
-    )
-    console.warn(
-      `[translate] Webhook delivery unavailable in channel ${targetChannelId}; falling back to bot message: ${safeErrorMessage(error)}`,
-    )
-    await targetChannel.send({
-      content: `**${author}**｜[查看原訊息](${message.url})\n${content}`,
-      allowedMentions: { parse: [], repliedUser: false },
-    })
+  const username = (
+    message.member?.displayName ?? message.author.displayName
+  ).slice(0, 80)
+  const avatarURL =
+    message.member?.displayAvatarURL({ extension: 'png', size: 128 }) ??
+    message.author.displayAvatarURL({ extension: 'png', size: 128 })
+  const files = message.attachments.map(translationAttachment)
+  for (const payload of translationPayloads(
+    translatedText,
+    files,
+    message.url,
+  )) {
+    try {
+      await sendTranslationWebhook(targetChannel, message.client.user.id, {
+        ...payload,
+        username,
+        avatarURL,
+      })
+    } catch (error) {
+      console.warn(
+        `[translate] Webhook delivery unavailable in channel ${targetChannelId}; falling back to bot message: ${safeErrorMessage(error)}`,
+      )
+      const author = escapeMarkdown(username)
+      const fallbackText = `**${author}**\n${payload.content ?? ''}`
+      const fallbackPayloads = translationPayloads(fallbackText, payload.files)
+      for (const fallbackPayload of fallbackPayloads) {
+        await targetChannel.send({
+          ...fallbackPayload,
+          allowedMentions: { parse: [], repliedUser: false },
+        })
+      }
+    }
   }
 }
 
@@ -111,7 +120,7 @@ export function startTranslationFeature(
         !message.inGuild() ||
         message.author.bot ||
         message.webhookId ||
-        !shouldTranslateMessage(message.content)
+        (!message.content.trim() && message.attachments.size === 0)
       ) {
         return
       }
@@ -128,10 +137,15 @@ export function startTranslationFeature(
           const targets = members.filter(
             (member) => member.channelId !== message.channelId,
           )
-          const translations = await translateToLanguages(
-            message.content,
-            targets.map((target) => target.language),
-          )
+          const translations = shouldTranslateMessage(message.content)
+            ? await translateToLanguages(
+                message.content,
+                targets.map((target) => target.language),
+              )
+            : targets.map((target) => ({
+                target: target.language,
+                text: message.content,
+              }))
           const translationsByLanguage = new Map(
             translations.map((translation) => [
               translation.target,
