@@ -43,21 +43,19 @@ const [
   { commands },
   { startRecurringEventScheduler },
   { startTranslationFeature },
-  { startConsultationFeature },
 ] = await Promise.all([
   import('./commands/index.js'),
   import('./recurring-events/scheduler.js'),
   import('./translation/feature.js'),
-  import('./consultation/feature.js'),
 ])
 
 const automaticTranslation = process.env.TRANSLATION_AUTO_ENABLED === 'true'
 const intents = [GatewayIntentBits.Guilds]
-if (automaticTranslation || process.env.CONSULTATION_ENABLED === 'true') {
-  intents.push(GatewayIntentBits.GuildMessages)
-}
 if (automaticTranslation) {
-  intents.push(GatewayIntentBits.MessageContent)
+  intents.push(
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  )
 }
 
 client = await startBot({
@@ -68,6 +66,5 @@ client = await startBot({
 
 stopScheduler = startRecurringEventScheduler(client)
 startTranslationFeature(client, { automatic: automaticTranslation })
-startConsultationFeature(client)
 healthServer.setStatus('ready')
 console.log(`[bot] Database: ${databaseDescription()}`)
