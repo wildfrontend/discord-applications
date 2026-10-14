@@ -8,6 +8,7 @@ import {
 export const DEFAULT_BOT_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.SendMessages,
+  PermissionFlagsBits.ReadMessageHistory,
   PermissionFlagsBits.AttachFiles,
   PermissionFlagsBits.EmbedLinks,
   PermissionFlagsBits.CreateEvents,
