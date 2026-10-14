@@ -10,6 +10,7 @@ import {
   ConsultationError,
   type ConsultationTurn,
 } from './service.js'
+import { readShareLinks } from './share-links.js'
 import { consultationChannelStore, consultationUsageStore } from './store.js'
 
 export function startConsultationFeature(
@@ -99,6 +100,13 @@ export function startConsultationFeature(
           message,
           '每次最多可詢問 3 張圖片，圖片總大小請控制在 20 MB 內。',
         )
+        return
+      }
+      try {
+        readShareLinks(text)
+      } catch (error) {
+        if (!(error instanceof ConsultationError)) throw error
+        await reply(message, error.message)
         return
       }
       const key = `${message.guildId}:${message.channelId}:${message.author.id}`

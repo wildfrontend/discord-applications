@@ -51,6 +51,7 @@ beforeEach(() => {
   now = 1_800_000_000_000
   mock.method(Date, 'now', () => now)
   mock.method(console, 'log', () => {})
+  mock.method(console, 'warn', () => {})
 })
 after(() => {
   mock.restoreAll()
@@ -116,6 +117,217 @@ function wikiFixture() {
   return { wiki, calls, closed: () => closed, connect: async () => wiki }
 }
 
+test('calculates shared configuration before AI and can answer with one text-only request', async () => {
+  const w = wikiFixture()
+  w.wiki.callTool = async (name, args) => {
+    w.calls.push([name, args])
+    return {
+      content: [],
+      structuredContent: {
+        result: {
+          final: { hp: 1780, atk: 100, spd: 150 },
+          derived: { defUnit: { flat: 10, pct: 0 } },
+        },
+        runes: [
+          {
+            id: 'r09',
+            name: '堅硬的皮膚I',
+            sourceUrl: 'https://wiki.example.test/r09',
+          },
+        ],
+        sourceUrl: 'https://wiki.example.test/panel',
+        warnings: ['Not a battle simulation'],
+      },
+    }
+  }
+  let requests = 0
+  const result = await answerConsultation(
+    {
+      text: '幫我看 https://dino-mutant-wiki.vercel.app/#v=2&hp=1780&atk=100&spd=150&s=r09.5.1&chpp=27',
+      images: [],
+    },
+    {
+      config,
+      connect: w.connect,
+      request: async (_url, init) => {
+        requests++
+        assert.equal(w.calls[0]?.[0], 'simulate_loadout')
+        assert.deepEqual(w.calls[0]?.[1], {
+          base: { hp: 1780, atk: 100, spd: 150 },
+          slots: [{ runeId: 'r09', level: 5, active: true }],
+          bonuses: [{ source: '星座', stat: 'hp', mode: 'pct', value: 0.27 }],
+        })
+        const body = JSON.parse(init?.body as string)
+        assert.ok(
+          body.messages.every(
+            (message: { content: unknown }) =>
+              typeof message.content === 'string',
+          ),
+        )
+        assert.match(body.messages.at(-1).content, /堅硬的皮膚I/)
+        assert.match(body.messages.at(-1).content, /Not a battle simulation/)
+        assert.doesNotMatch(body.messages.at(-1).content, /#v=2/)
+        return aiResponse('單位減傷為 10。')
+      },
+    },
+  )
+  assert.equal(requests, 1)
+  assert.match(result, /https:\/\/wiki.example.test\/panel/)
+  assert.equal(w.closed(), 1)
+})
+
+test('missing shared inputs skip automatic simulation and follow-ups reuse the latest share', async () => {
+  const w = wikiFixture()
+  await answerConsultation(
+    {
+      text: '有什麼缺少的？',
+      images: [],
+      history: [
+        {
+          question: 'https://dino-mutant-wiki.vercel.app/#s=r09.5',
+          answer: '請補素質',
+        },
+      ],
+    },
+    {
+      config,
+      connect: w.connect,
+      request: async (_url, init) => {
+        const body = JSON.parse(init?.body as string)
+        assert.match(
+          body.messages.at(-1).content,
+          /Missing base stats or condition toggles/,
+        )
+        assert.match(body.messages.at(-1).content, /r09/)
+        assert.match(body.messages.at(-1).content, /有什麼缺少的/)
+        assert.doesNotMatch(JSON.stringify(body.messages), /#s=r09/)
+        return aiResponse('請提供素質與條件。')
+      },
+    },
+  )
+  assert.equal(w.calls.length, 0)
+})
+
+test('invalid shares never reach the AI provider or Wiki', async () => {
+  let calls = 0
+  await assert.rejects(
+    answerConsultation(
+      { text: 'https://dino-mutant-wiki.vercel.app/#hp=NaN', images: [] },
+      {
+        config,
+        connect: async () => {
+          calls++
+          throw new Error('unexpected')
+        },
+        request: async () => {
+          calls++
+          return aiResponse('unexpected')
+        },
+      },
+    ),
+    /格式不正確/,
+  )
+  assert.equal(calls, 0)
+})
+
+test('inventory name lookup only exposes listed IDs rather than the whole Wiki catalog', async () => {
+  const w = wikiFixture()
+  w.wiki.callTool = async (name, args) => {
+    w.calls.push([name, args])
+    return {
+      content: [],
+      structuredContent: {
+        items: [
+          {
+            id: 'r09',
+            name: '堅硬的皮膚I',
+            scope: '通用',
+            sourceUrl: 'https://wiki.example.test/r09',
+          },
+          {
+            id: 'r99',
+            name: 'Unowned catalog entry',
+            sourceUrl: 'https://wiki.example.test/unowned',
+          },
+        ],
+      },
+    }
+  }
+  const answer = await answerConsultation(
+    {
+      text: '我能換哪個？ https://dino-mutant-wiki.vercel.app/inventory#inv=r09.5',
+      images: [],
+    },
+    {
+      config,
+      connect: w.connect,
+      request: async (_url, init) => {
+        const body = JSON.parse(init?.body as string)
+        assert.match(body.messages.at(-1).content, /堅硬的皮膚I/)
+        assert.doesNotMatch(
+          body.messages.at(-1).content,
+          /Unowned catalog entry|r99/,
+        )
+        return aiResponse('目前提供堅硬的皮膚I 5 級。')
+      },
+    },
+  )
+  assert.deepEqual(w.calls, [['search_runes', { limit: 100 }]])
+  assert.doesNotMatch(answer, /unowned/)
+})
+
+test('preloads exact current-level effects for a small inventory and removes duplicate rune metadata', async () => {
+  const w = wikiFixture()
+  w.wiki.tools.push({ name: 'get_rune', inputSchema: { type: 'object' } })
+  w.wiki.callTool = async (name, args) => {
+    w.calls.push([name, args])
+    return {
+      content: [],
+      structuredContent:
+        name === 'get_rune'
+          ? {
+              rune: { id: 'r34', name: '屏障' },
+              level: 2,
+              item: {
+                rune: { name: 'duplicate metadata' },
+                value1: 0.18,
+                upgradeToNextDust: null,
+              },
+              effectSpec: {
+                effects: [{ stat: 'hp', mode: 'pct', from: 'v1' }],
+              },
+              warnings: ['null is unknown'],
+              sourceUrl: 'https://wiki.example.test/r34',
+            }
+          : { items: [] },
+    }
+  }
+  await answerConsultation(
+    {
+      text: 'https://dino-mutant-wiki.vercel.app/inventory#inv=r34.2',
+      images: [],
+    },
+    {
+      config,
+      connect: w.connect,
+      request: async (_url, init) => {
+        const body = JSON.parse(init?.body as string)
+        const evidence = body.messages.at(-1).content
+        assert.match(evidence, /"value1":0.18/)
+        assert.match(evidence, /"stat":"hp"/)
+        assert.match(evidence, /"upgradeToNextDust":null/)
+        assert.match(evidence, /null is unknown/)
+        assert.doesNotMatch(evidence, /duplicate metadata/)
+        return aiResponse('屏障 2 級為生命 +18%。')
+      },
+    },
+  )
+  assert.deepEqual(w.calls, [
+    ['search_runes', { limit: 100 }],
+    ['get_rune', { id: 'r34', level: 2 }],
+  ])
+})
+
 test('consultation prefers AI_WIKI_KEY and supports independent provider settings', () => {
   assert.equal(consultationConfig().apiKey, 'wiki-test-key')
   process.env.CONSULTATION_AI_API_KEY = 'separate-key'
@@ -154,7 +366,23 @@ test('sends image inputs and executes MCP calls before replying with sources', a
         )
         const body = JSON.parse(init?.body as string)
         requests.push(body)
-        return requests.length === 1
+        if (requests.length === 1) {
+          assert.equal(body.tools, undefined)
+          assert.equal(body.response_format.type, 'json_object')
+          return aiResponse(
+            JSON.stringify({
+              images: [
+                {
+                  index: 1,
+                  runes: ['生命符文 5 級'],
+                  stats: 'unknown',
+                  uncertain: 'none',
+                },
+              ],
+            }),
+          )
+        }
+        return requests.length === 2
           ? aiResponse(null, [
               toolCall('search_runes', '{"query":"生命","limit":2}'),
             ])
@@ -173,9 +401,25 @@ test('sends image inputs and executes MCP calls before replying with sources', a
     'https://cdn.discordapp.com/image.png',
   )
   assert.ok(
-    requests[0].messages.some((message) => message.content === '我無課'),
+    requests[1].messages.some((message) => message.content === '我無課'),
   )
-  const result = requests[1].messages.at(-1)
+  assert.ok(
+    requests
+      .slice(1)
+      .every((request) =>
+        request.messages.every(
+          (message) =>
+            typeof message.content === 'string' || message.content === null,
+        ),
+      ),
+  )
+  assert.ok(
+    !JSON.stringify(requests.slice(1)).includes(
+      'https://cdn.discordapp.com/image.png',
+    ),
+  )
+  assert.ok(JSON.stringify(requests[1]).includes('生命符文 5 級'))
+  const result = requests[2].messages.at(-1)
   assert.ok(result && typeof result.content === 'string')
   assert.equal(result.role, 'tool')
   assert.equal(
@@ -211,7 +455,7 @@ test('rejects unknown tools and invalid tool arguments without executing them', 
 })
 
 test('handles provider errors without exposing response secrets and always closes MCP', async () => {
-  for (const status of [401, 429, 500]) {
+  for (const status of [400, 401, 403, 413, 429, 500]) {
     const w = wikiFixture()
     await assert.rejects(
       answerConsultation(
@@ -294,7 +538,7 @@ test('oversized Wiki results request a narrower query instead of filling AI cont
 test('limits tool loops, handles truncated answers and validates images before connecting', async () => {
   const w = wikiFixture()
   const truncated = await answerConsultation(
-    { text: '', images: ['https://example.test/image.png'] },
+    { text: '問題', images: [] },
     {
       config,
       connect: w.connect,
@@ -334,6 +578,176 @@ test('limits tool loops, handles truncated answers and validates images before c
     /暫時無法/,
   )
   assert.equal(requests, 7)
+})
+
+test('three screenshots are read once without tools, history or a full diagnosis prompt', async () => {
+  const w = wikiFixture()
+  let requests = 0
+  const images = [
+    'https://cdn.discordapp.com/1.png',
+    'https://cdn.discordapp.com/2.png',
+    'https://cdn.discordapp.com/3.png',
+  ]
+  await answerConsultation(
+    {
+      text: '請建議 PVP 配置',
+      images,
+      history: [
+        { question: '先前问题'.repeat(500), answer: '先前回答'.repeat(500) },
+      ],
+    },
+    {
+      config,
+      connect: w.connect,
+      request: async (_url, init) => {
+        const body = JSON.parse(init?.body as string)
+        if (++requests === 1) {
+          assert.equal(body.tools, undefined)
+          assert.equal(body.messages.length, 2)
+          assert.ok(body.messages[0].content.length < 700)
+          assert.equal(
+            body.messages[1].content.filter(
+              (part: { type: string }) => part.type === 'image_url',
+            ).length,
+            3,
+          )
+          return aiResponse(
+            JSON.stringify({
+              images: images.map((_, index) => ({
+                index: index + 1,
+                runes: ['橘色皇冠 5 級'],
+                stats: 'unknown',
+                uncertain: 'name unreadable',
+              })),
+            }),
+          )
+        }
+        assert.ok(!JSON.stringify(body).includes('image_url'))
+        assert.ok(JSON.stringify(body).includes('name unreadable'))
+        return aiResponse('需要確認符文名稱。')
+      },
+    },
+  )
+  assert.equal(requests, 2)
+  assert.equal(w.closed(), 1)
+})
+
+test('truncated or malformed screenshot observations stop before Wiki queries', async () => {
+  for (const content of [
+    'invalid JSON',
+    'null',
+    '[]',
+    '{}',
+    '{"images":[]}',
+    '{"images":[{"index":1}]}',
+  ]) {
+    await assert.rejects(
+      answerConsultation(
+        { text: '圖片', images: ['https://example.test/image.png'] },
+        {
+          config,
+          connect: async () => {
+            throw new Error('must not connect')
+          },
+          request: async () => aiResponse(content),
+        },
+      ),
+      /圖片辨識/,
+    )
+  }
+  await assert.rejects(
+    answerConsultation(
+      { text: '圖片', images: ['https://example.test/image.png'] },
+      {
+        config,
+        connect: async () => {
+          throw new Error('must not connect')
+        },
+        request: async () => aiResponse('{', undefined, 'length'),
+      },
+    ),
+    /尚未完整/,
+  )
+})
+
+test('oversized requests report capacity rather than a broken API key', async () => {
+  await assert.rejects(
+    answerConsultation(
+      { text: '圖片', images: ['https://example.test/image.png'] },
+      {
+        config,
+        request: async () =>
+          new Response('secret upstream detail', { status: 413 }),
+      },
+    ),
+    (error: unknown) =>
+      error instanceof ConsultationError &&
+      /單次容量/.test(error.message) &&
+      !error.message.includes('secret upstream detail'),
+  )
+})
+
+test('image diagnosis stops querying after two rounds and summarizes confirmed results', async () => {
+  const w = wikiFixture()
+  let requests = 0
+  await answerConsultation(
+    { text: 'PVP 配置', images: ['https://example.test/image.png'] },
+    {
+      config,
+      connect: w.connect,
+      request: async (_url, init) => {
+        const body = JSON.parse(init?.body as string)
+        requests++
+        if (requests === 1)
+          return aiResponse(
+            JSON.stringify({
+              images: [
+                {
+                  index: 1,
+                  runes: ['unknown icon'],
+                  stats: 'unknown',
+                  uncertain: 'name unreadable',
+                },
+              ],
+            }),
+          )
+        if (requests <= 3) return aiResponse(null, [toolCall()])
+        assert.equal(body.tool_choice, 'none')
+        assert.ok(!JSON.stringify(body).includes('image_url'))
+        return aiResponse('已有資料與尚需確認的項目。')
+      },
+    },
+  )
+  assert.equal(requests, 4)
+  assert.equal(w.calls.length, 2)
+})
+
+test('exhausting the Wiki query budget still permits a final answer with missing data', async () => {
+  const w = wikiFixture()
+  let requests = 0
+  const answer = await answerConsultation(
+    { text: '配裝', images: [] },
+    {
+      config,
+      connect: w.connect,
+      request: async (_url, init) => {
+        if (++requests === 1)
+          return aiResponse(
+            null,
+            Array.from({ length: 13 }, (_, index) => ({
+              ...toolCall(),
+              id: `call-${index}`,
+            })),
+          )
+        const body = JSON.parse(init?.body as string)
+        assert.equal(body.tool_choice, 'none')
+        assert.match(body.messages.at(-1).content, /budget is exhausted/)
+        return aiResponse('已確認的資料如下；其他資料仍待補充。')
+      },
+    },
+  )
+  assert.match(answer, /待補充/)
+  assert.equal(w.calls.length, 12)
 })
 
 async function featureFixture(
@@ -477,6 +891,30 @@ test('accepts image-only questions and rejects unsupported or excessive attachme
   assert.deepEqual(f.requests[0].images, [
     'https://cdn.discordapp.com/screen.png',
   ])
+})
+
+test('invalid share links get instructions without consuming quota or cooldown', async () => {
+  const f = await featureFixture()
+  const user = `invalid-share-${counter}`
+  await f.send('<@123> https://dino-mutant-wiki.vercel.app/', { user })
+  await f.send('<@123> https://dino-mutant-wiki.vercel.app/#s=r09.99.1', {
+    user,
+  })
+  assert.equal(f.requests.length, 0)
+  assert.equal(
+    (await consultationUsageStore.get(consultationDay(now), user)).user,
+    0,
+  )
+  assert.match(f.replies[0].content, /按「分享」/)
+  await f.send(
+    '<@123> https://dino-mutant-wiki.vercel.app/#hp=1780&atk=100&spd=150&s=r09.5.1',
+    { user },
+  )
+  assert.equal(f.requests.length, 1)
+  assert.equal(
+    (await consultationUsageStore.get(consultationDay(now), user)).user,
+    1,
+  )
 })
 
 test('keeps follow-up context private to each member and expires it after 20 minutes', async () => {
