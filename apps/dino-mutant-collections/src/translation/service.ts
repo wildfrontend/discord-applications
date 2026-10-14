@@ -134,11 +134,10 @@ export async function translateToLanguages(
 }
 
 export function shouldTranslateMessage(text: string): boolean {
-  const trimmed = text.trim()
+  const trimmed = text.replace(/https?:\/\/[^\s<>]+/gi, '').trim()
   if (!trimmed || trimmed.startsWith('/') || !/\p{L}/u.test(trimmed)) {
     return false
   }
-  if (/^https?:\/\/\S+$/i.test(trimmed)) return false
   if (/^```[\s\S]*```$/.test(trimmed) || /^`[^`]+`$/.test(trimmed)) return false
   return true
 }

@@ -1,11 +1,11 @@
 import type { TextChannel, Webhook } from 'discord.js'
+import type { TranslationPayload } from './message-payload.js'
 
 const translationWebhookName = 'Dino 翻譯'
 const translationWebhooks = new Map<string, Promise<Webhook>>()
 
-interface TranslationWebhookMessage {
+interface TranslationWebhookMessage extends TranslationPayload {
   avatarURL: string
-  content: string
   username: string
 }
 
@@ -42,6 +42,7 @@ export async function sendTranslationWebhook(
     const webhook = await createOrFindWebhook
     await webhook.send({
       content: message.content,
+      files: message.files,
       username: message.username.slice(0, 80),
       avatarURL: message.avatarURL,
       allowedMentions: { parse: [], repliedUser: false },

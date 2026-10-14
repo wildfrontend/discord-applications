@@ -11,7 +11,14 @@ import {
   languageNames,
   type TranslationLanguage,
 } from '../translation/languages.js'
-import { translateToLanguage } from '../translation/service.js'
+import {
+  translationAttachment,
+  translationPayloads,
+} from '../translation/message-payload.js'
+import {
+  shouldTranslateMessage,
+  translateToLanguage,
+} from '../translation/service.js'
 import {
   translationBindingStore,
   translationChannelLinkStore,
@@ -32,6 +39,8 @@ const japaneseLocalizations: Record<string, string> = {
     '入力内容を翻訳して現在のチャンネルに送信します',
   訊息: 'メッセージ',
   要翻譯並送出的內容: '翻訳して送信する内容',
+  附件: '添付ファイル',
+  隨訊息一起傳送的圖片或檔案: 'メッセージと一緒に送信する画像やファイル',
   輸入語言: '入力言語',
   '原文語言；未選擇時使用個人預設或自動偵測':
     '原文の言語。省略時は個人設定または自動検出を使用します',
@@ -125,8 +134,19 @@ export default defineCommand({
             .setDescriptionLocalizations(
               localizations('要翻譯並送出的內容', '번역하여 보낼 내용'),
             )
-            .setRequired(true)
             .setMaxLength(4_000),
+        )
+        .addAttachmentOption((option) =>
+          option
+            .setName('attachment')
+            .setNameLocalizations(localizations('附件', '첨부파일'))
+            .setDescription('Image or file to send with your message')
+            .setDescriptionLocalizations(
+              localizations(
+                '隨訊息一起傳送的圖片或檔案',
+                '메시지와 함께 보낼 이미지 또는 파일',
+              ),
+            ),
         )
         .addStringOption((option) =>
           option
@@ -377,10 +397,11 @@ export default defineCommand({
 
     const subcommand = interaction.options.getSubcommand()
     if (subcommand === 'send') {
-      const message = interaction.options.getString('message', true).trim()
-      if (!message) {
+      const message = interaction.options.getString('message')?.trim() ?? ''
+      const attachment = interaction.options.getAttachment('attachment')
+      if (!message && !attachment) {
         await interaction.reply({
-          content: '請輸入要翻譯的內容。',
+          content: '請輸入要翻譯的內容，或選擇要傳送的附件。',
           flags: MessageFlags.Ephemeral,
         })
         return
@@ -426,7 +447,8 @@ export default defineCommand({
             null)
       const target = selectedLanguage(outputOption) ?? preference?.language
 
-      if (!target) {
+      const needsTranslation = shouldTranslateMessage(message)
+      if (needsTranslation && !target) {
         await interaction.reply({
           content:
             '請在 `output-language` 選擇輸出語言，或先用 `/translate config` 設定個人預設值。',
@@ -434,7 +456,7 @@ export default defineCommand({
         })
         return
       }
-      if (source === target) {
+      if (needsTranslation && source === target) {
         await interaction.reply({
           content: '輸入語言與輸出語言不能相同。',
           flags: MessageFlags.Ephemeral,
@@ -444,25 +466,26 @@ export default defineCommand({
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral })
       try {
-        const translated = await translateToLanguage(
-          message,
-          target,
-          source ?? 'auto',
-        )
-        const content =
-          translated.text.length <= 2_000
-            ? translated.text
-            : `${translated.text.slice(0, 1_999)}…`
-        await sendTranslationWebhook(channel, interaction.client.user.id, {
-          content,
-          username: interaction.member.displayName,
-          avatarURL: interaction.member.displayAvatarURL({
-            extension: 'png',
-            size: 128,
-          }),
-        })
+        const text =
+          needsTranslation && target
+            ? (await translateToLanguage(message, target, source ?? 'auto'))
+                .text
+            : message
+        const files = attachment ? [translationAttachment(attachment)] : []
+        for (const payload of translationPayloads(text, files)) {
+          await sendTranslationWebhook(channel, interaction.client.user.id, {
+            ...payload,
+            username: interaction.member.displayName,
+            avatarURL: interaction.member.displayAvatarURL({
+              extension: 'png',
+              size: 128,
+            }),
+          })
+        }
         await interaction.editReply(
-          `已用你的暱稱與頭像送出${languageNames[target]}翻譯。`,
+          needsTranslation && target
+            ? `已用你的暱稱與頭像送出${languageNames[target]}翻譯${attachment ? '與附件' : ''}。`
+            : `已用你的暱稱與頭像送出${attachment ? '附件' : '訊息'}。`,
         )
       } catch (error) {
         const details = error instanceof Error ? error.message : String(error)
