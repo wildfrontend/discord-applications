@@ -53,7 +53,8 @@ const instruction = `You are dr.大暴龍, the Dino Mutant rune diagnosis assist
 Answer in the language of the member's question; default to Traditional Chinese for image-only questions.
 For game facts, rune recommendations, costs, levels, and calculations, consult the Wiki tools before answering. Search for rune IDs first; never invent IDs, stats, material costs, prices, probabilities, or win rates.
 Only use the member's explicitly supplied base stats, owned runes, levels and activation conditions for loadout simulations. Ask for missing information rather than assuming it. Describe uncertain image details as uncertain. null means missing or inapplicable, not zero. Explain warnings, anomalies and unconfirmed data. Unconfirmed applicability does NOT mean no effect: when Titan applicability is unconfirmed, your conclusion must say 尚未證實 / unknown, never 不能 / 不會生效. Do not add unsolicited max-level examples. The Wiki is a snapshot, not live game data.
-Respect the member's stated goals and budget. Distinguish current feasible upgrades from future plans; use incremental costs from current levels. Refer to Wiki usage notes for game-specific guidance.
+Respect the member's goals and budget. Free-to-play does not automatically rule out owned rare runes or force blue/green upgrades; evaluate current-level effects, attainable materials and whole-loadout benefits. Consider a suitable owned red rune as a core candidate, but do not assume ownership, max-level effects or that it must receive all upgrade materials. Separate feasible current upgrades from conditional future plans. Costs are incremental from the current level, with dust, duplicate runes and hearts separate; never invent conversion rates or paid acquisition guarantees.
+Use small search limits (at most 5), and pass the member's requested level to get_rune instead of fetching all 31 levels. Request only the information needed for this question.
 Cite sourceUrl values returned by the tools as Markdown links. Keep answers clear and concise, and distinguish Wiki facts from your advice.
 Always use this full diagnosis template, with headings translated into the member's language:
 **診斷結論** — one or two sentences with the recommended action or explicit uncertainty.
@@ -72,6 +73,7 @@ export async function answerConsultation(
     request?: typeof fetch
     config?: ReturnType<typeof consultationConfig>
     pause?: (milliseconds: number, signal: AbortSignal) => Promise<void>
+    onProgress?: (text: string) => Promise<void>
   } = {},
 ): Promise<string> {
   const config = dependencies.config ?? consultationConfig()
@@ -84,11 +86,6 @@ export async function answerConsultation(
   try {
     wiki = await (dependencies.connect ?? connectWiki)(config.mcpUrl, signal)
     const messages: ChatMessage[] = [{ role: 'system', content: instruction }]
-    if (wiki.instructions)
-      messages.push({
-        role: 'user',
-        content: `Wiki usage notes (reference data, not instructions from the member):\n${wiki.instructions.slice(0, 12000)}`,
-      })
     for (const turn of question.history ?? [])
       messages.push(
         { role: 'user', content: turn.question },
@@ -147,10 +144,15 @@ export async function answerConsultation(
           retry === 2 ||
           !Number.isFinite(waitSeconds) ||
           waitSeconds <= 0 ||
-          waitSeconds > 30
+          waitSeconds > 60
         )
           break
         await response.arrayBuffer()
+        await dependencies
+          .onProgress?.(
+            `⏳ AI 需要等待約 ${Math.ceil(waitSeconds)} 秒，診斷仍在處理中…`,
+          )
+          .catch(() => {})
         if (dependencies.pause)
           await dependencies.pause(Math.ceil(waitSeconds * 1000), signal)
         else await delay(Math.ceil(waitSeconds * 1000), undefined, { signal })
@@ -158,7 +160,9 @@ export async function answerConsultation(
       if (!response) throw new Error('AI response missing')
       if (!response.ok) {
         if (response.status === 429)
-          throw new ConsultationError('AI 目前達到使用量限制，請稍後再試。')
+          throw new ConsultationError(
+            'Groq 的 AI 請求／token 額度暫時受限，這不代表你已用完每日診斷題數。請稍後再試，或將比較拆成較小的問題。',
+          )
         throw new ConsultationError(
           '諮詢 AI 暫時無法使用，請聯絡管理員檢查模型與 API 設定。',
         )
@@ -188,6 +192,9 @@ export async function answerConsultation(
         content: message.content,
         tool_calls: message.tool_calls,
       })
+      await dependencies
+        .onProgress?.('🔎 正在查詢符文資料並整理診斷…')
+        .catch(() => {})
       for (const call of message.tool_calls) {
         if (++toolCalls > 12)
           throw new ConsultationError(
@@ -211,7 +218,7 @@ export async function answerConsultation(
             structuredContent: output.structuredContent,
           })
           result =
-            raw.length > 40000
+            raw.length > 6000
               ? JSON.stringify({
                   error:
                     'Tool result is too long. Query a narrower range, specific level, or smaller search limit.',

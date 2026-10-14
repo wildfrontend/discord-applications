@@ -236,6 +236,7 @@ test('retries short Groq rate limits using Retry-After without repeating MCP cal
   const w = wikiFixture()
   let requests = 0
   const waits: number[] = []
+  const progress: string[] = []
   const answer = await answerConsultation(
     { text: '問題', images: [] },
     {
@@ -244,21 +245,49 @@ test('retries short Groq rate limits using Retry-After without repeating MCP cal
       pause: async (milliseconds) => {
         waits.push(milliseconds)
       },
+      onProgress: async (text) => {
+        progress.push(text)
+      },
       request: async () => {
         requests++
         if (requests === 1) return aiResponse(null, [toolCall()])
         if (requests === 2)
           return new Response('', {
             status: 429,
-            headers: { 'retry-after': '26' },
+            headers: { 'retry-after': '45' },
           })
         return aiResponse('診斷完成。')
       },
     },
   )
   assert.match(answer, /診斷完成/)
-  assert.deepEqual(waits, [26000])
+  assert.deepEqual(waits, [45000])
+  assert.ok(progress.some((text) => text.includes('45 秒')))
   assert.equal(w.calls.length, 1)
+  assert.equal(w.closed(), 1)
+})
+
+test('oversized Wiki results request a narrower query instead of filling AI context', async () => {
+  const w = wikiFixture()
+  w.wiki.callTool = async () => ({
+    content: [],
+    structuredContent: { values: 'x'.repeat(10000) },
+  })
+  let requests = 0
+  await answerConsultation(
+    { text: '查詢符文', images: [] },
+    {
+      config,
+      connect: w.connect,
+      request: async (_url, init) => {
+        if (++requests === 1) return aiResponse(null, [toolCall()])
+        const body = JSON.parse(init?.body as string)
+        assert.match(body.messages.at(-1).content, /narrower range/)
+        assert.ok(body.messages.at(-1).content.length < 6000)
+        return aiResponse('請指定符文等級。')
+      },
+    },
+  )
   assert.equal(w.closed(), 1)
 })
 
@@ -314,13 +343,20 @@ async function featureFixture(
   const channelId = `channel-${counter}`
   await consultationChannelStore.set(guildId, channelId, 'admin')
   let listener: (message: Message) => Promise<void>
+  let updateListener: (before: Message, after: Message) => Promise<void>
   const requests: ConsultationQuestion[] = []
   const replies: Array<{ content: string; allowedMentions: unknown }> = []
+  const posted: Array<(typeof replies)[number]> = []
+  const edits: Array<(typeof replies)[number]> = []
+  let messageCounter = 0
+  let lostStatus = false
   let fail = false
   const client = {
     user: { id: '123' },
     on(event: string, callback: typeof listener) {
       if (event === Events.MessageCreate) listener = callback
+      if (event === Events.MessageUpdate)
+        updateListener = callback as unknown as typeof updateListener
     },
   } as unknown as Client
   startConsultationFeature(client, async (question) => {
@@ -334,6 +370,11 @@ async function featureFixture(
     channelId,
     requests,
     replies,
+    posted,
+    edits,
+    loseStatus() {
+      lostStatus = true
+    },
     fail() {
       fail = true
     },
@@ -346,9 +387,12 @@ async function featureFixture(
         webhook?: boolean
         files?: Attachment[]
         mentions?: boolean
+        id?: string
+        previousContent?: string
       } = {},
     ) {
-      await listener({
+      const message = {
+        id: options.id ?? `${channelId}-message-${++messageCounter}`,
         content,
         guildId,
         channelId: options.channel ?? channelId,
@@ -364,9 +408,29 @@ async function featureFixture(
           (options.files ?? []).map((file, index) => [`${index}`, file]),
         ),
         channel: { sendTyping: async () => {} },
-        reply: async (payload: (typeof replies)[number]) =>
-          replies.push(payload),
-      } as unknown as Message)
+        reply: async (payload: (typeof replies)[number]) => {
+          const entry = { ...payload }
+          replies.push(entry)
+          posted.push({ ...payload })
+          return {
+            async edit(update: (typeof replies)[number]) {
+              if (lostStatus) throw new Error('Status message deleted')
+              Object.assign(entry, update)
+              edits.push({ ...update })
+            },
+            async delete() {
+              const index = replies.indexOf(entry)
+              if (index !== -1) replies.splice(index, 1)
+            },
+          }
+        },
+      } as unknown as Message
+      if (options.previousContent !== undefined) {
+        await updateListener(
+          { ...message, content: options.previousContent } as Message,
+          message,
+        )
+      } else await listener(message)
     },
   }
 }
@@ -434,9 +498,56 @@ test('throttles repeated questions and does not expose unexpected errors', async
   f.fail()
   await f.send('<@123> 問題')
   assert.ok(!f.replies[0].content.includes('secret-error'))
+  assert.match(f.posted[0].content, /正在思考/)
+  assert.equal(f.edits.length, 1)
+  assert.ok(!f.replies[0].content.includes('正在思考'))
   await f.send('<@123> 問題')
   assert.equal(f.requests.length, 1)
   assert.match(f.replies.at(-1)?.content ?? '', /再等/)
+})
+
+test('posts a thinking status before AI starts and replaces it with the result', async () => {
+  const f = await featureFixture(async () => {
+    assert.match(f.replies[0].content, /正在思考並查詢 Wiki/)
+    return '完整診斷結果。'
+  })
+  await f.send('<@123> 問題', { user: 'status-user' })
+  assert.equal(f.posted.length, 1)
+  assert.equal(f.edits.length, 1)
+  assert.match(f.replies[0].content, /完整診斷結果/)
+  assert.ok(!f.replies[0].content.includes('正在思考'))
+  assert.deepEqual(f.posted[0].allowedMentions, {
+    parse: [],
+    repliedUser: false,
+  })
+})
+
+test('delivers the answer as a new reply when the thinking status was deleted', async () => {
+  const f = await featureFixture(async () => '診斷結果。')
+  f.loseStatus()
+  await f.send('<@123> 問題', { user: 'deleted-status-user' })
+  assert.equal(f.posted.length, 2)
+  assert.equal(f.replies.length, 1)
+  assert.match(f.replies[0].content, /診斷結果/)
+})
+
+test('first mention added by editing triggers once, while later edits do not consume quota', async () => {
+  const f = await featureFixture()
+  const options = { user: 'edit-user', id: 'edited-question' }
+  await f.send('普通問題', options)
+  await f.send('<@123> 普通問題', { ...options, previousContent: '普通問題' })
+  assert.equal(f.requests.length, 1)
+  now += 61_000
+  await f.send('<@123> 改了問題', {
+    ...options,
+    previousContent: '<@123> 普通問題',
+  })
+  await f.send('<@123> 普通問題', options)
+  assert.equal(f.requests.length, 1)
+  assert.equal(
+    (await consultationUsageStore.get(consultationDay(now), 'edit-user')).user,
+    1,
+  )
 })
 
 test('daily quota enforces member and bot limits with one atomic reservation', async () => {
