@@ -119,6 +119,40 @@ Automatic translation also forwards images and other attachments, preserving fil
 
 If webhook delivery is unavailable, the bot's fallback messages also include the attachments. Grant the bot **Attach Files** permission for this fallback. Discord's upload size limits still apply to forwarded files.
 
+## Rune diagnosis — dr.大暴龍
+
+`dr.大暴龍` answers rune questions and examines screenshots using an image-capable AI model and the [Dino Mutant Wiki MCP](https://dino-mutant-wiki.vercel.app/mcp). It can search runes, retrieve level-specific effects and costs, look up Titan damage, and simulate loadouts from the member's supplied stats. Answers cite Wiki sources and identify incomplete or uncertain data.
+
+The AI is instructed to use a full diagnosis template: **診斷結論**, **目前配置**, **效果比較**, **升級成本與停點**, **缺少資料**, and **資料來源**. Each heading remains present; missing or irrelevant inputs are marked as such instead of assuming ownership, base stats, upgrade costs or a target level.
+
+Enable the feature in `.env`, then restart the bot:
+
+```env
+CONSULTATION_ENABLED=true
+CONSULTATION_MCP_URL=https://dino-mutant-wiki.vercel.app/mcp
+AI_WIKI_KEY=your-groq-api-key
+```
+
+The key priority is `CONSULTATION_AI_API_KEY`, then `AI_WIKI_KEY`, then the existing `AI_API_KEY`. The model and API base URL default to `AI_MODEL` and `AI_BASE_URL`. To use a separate provider or model, set `CONSULTATION_AI_MODEL`, `CONSULTATION_AI_BASE_URL`, and `CONSULTATION_AI_API_KEY`. The default Groq model, `qwen/qwen3.8-27b`, supports both images and tool calling. Changes to these environment settings require a bot restart.
+
+Administrators with **Manage Channels** can open the clinic in a normal text channel:
+
+```text
+/rune-dr open channel:#rune-clinic
+/rune-dr status
+/rune-dr close
+```
+
+Omit `channel` to use the current channel. In Traditional Chinese Discord, the subcommands are displayed as **開診**, **診間狀態**, and **休診**. Channel settings persist across restarts. The bot needs **View Channel**, **Send Messages**, and **Read Message History** in the selected channel.
+
+Members must explicitly **@mention the bot** in an enabled channel. A question, supported image attachment, or both can follow the mention. Regular messages, replies without an explicit mention, bots, webhooks, and other channels do not trigger consultation. Up to three PNG, JPEG, or WebP images are supported per question, with a combined size of 20 MB. Answers are sent by the bot under a **dr.大暴龍｜符文診斷** heading and split when they exceed Discord's message limit.
+
+Each member can submit one question at a time, with a 60-second minimum interval and 10 questions per day across all channels and servers. The entire bot has a 100-question daily budget and processes one consultation at a time. Daily usage persists across restarts and resets at midnight in Asia/Taipei. A question counts when AI processing starts, including attempts that later fail; invalid inputs, cooldown rejections and busy replies do not consume quota. Administrators can inspect usage with `/rune-dr status`. Configure these limits through `CONSULTATION_COOLDOWN_SECONDS`, `CONSULTATION_USER_DAILY_LIMIT`, `CONSULTATION_BOT_DAILY_LIMIT`, and `CONSULTATION_MAX_CONCURRENT` (1–3). Short Groq rate limits are retried according to the provider's `Retry-After` header, within an overall two-minute request timeout. These are question limits, rather than provider token or request budgets; a question may require several AI requests.
+
+Questions and images are sent to the configured AI provider; query arguments are sent to the Wiki MCP. Tell members before enabling the feature. Follow-up context is kept separately for each member in each channel, limited to four exchanges, and expires after 20 minutes or a bot restart. The bot does not retrieve other members' chat history. The AI may ask for base stats, rune levels, ownership, or activation conditions before calculating a recommendation. Only the Wiki's four inspected query/calculation tools are available.
+
+This mention-only feature uses the standard Guild Messages intent and does not itself require Message Content Intent. Automatic channel translation still requires Message Content Intent.
+
 ## Recurring events
 
 Create the first event with Discord's native scheduled-event interface, then configure recurrence:
