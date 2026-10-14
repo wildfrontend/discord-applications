@@ -119,46 +119,6 @@ Automatic translation also forwards images and other attachments, preserving fil
 
 If webhook delivery is unavailable, the bot's fallback messages also include the attachments. Grant the bot **Attach Files** permission for this fallback. Discord's upload size limits still apply to forwarded files.
 
-## Rune diagnosis — dr.大暴龍
-
-`dr.大暴龍` answers rune questions and examines screenshots using an image-capable AI model and the [Dino Mutant Wiki MCP](https://dino-mutant-wiki.vercel.app/mcp). It can search runes, retrieve level-specific effects and costs, look up Titan damage, and simulate loadouts from the member's supplied stats. Answers cite Wiki sources and identify incomplete or uncertain data.
-
-The AI is instructed to use a full diagnosis template: **診斷結論**, **目前配置**, **效果比較**, **升級成本與停點**, **缺少資料**, and **資料來源**. Each heading remains present; missing or irrelevant inputs are marked as such instead of assuming ownership, base stats, upgrade costs or a target level.
-
-Enable the feature in `.env`, then restart the bot:
-
-```env
-CONSULTATION_ENABLED=true
-CONSULTATION_MCP_URL=https://dino-mutant-wiki.vercel.app/mcp
-AI_WIKI_KEY=your-groq-api-key
-```
-
-The key priority is `CONSULTATION_AI_API_KEY`, then `AI_WIKI_KEY`, then the existing `AI_API_KEY`. The model and API base URL default to `AI_MODEL` and `AI_BASE_URL`. To use a separate provider or model, set `CONSULTATION_AI_MODEL`, `CONSULTATION_AI_BASE_URL`, and `CONSULTATION_AI_API_KEY`. The default Groq model, `qwen/qwen3.8-27b`, supports both images and tool calling. Changes to these environment settings require a bot restart.
-
-Administrators with **Manage Channels** can open the clinic in a normal text channel:
-
-```text
-/rune-dr open channel:#rune-clinic
-/rune-dr status
-/rune-dr close
-```
-
-Omit `channel` to use the current channel. In Traditional Chinese Discord, the subcommands are displayed as **開診**, **診間狀態**, and **休診**. Channel settings persist across restarts. The bot needs **View Channel**, **Send Messages**, and **Read Message History** in the selected channel.
-
-Members must explicitly **@mention the bot** in an enabled channel. A question, supported image attachment, or both can follow the mention. Adding the first explicit mention by editing a cached message also triggers consultation; subsequent edits to an already-mentioned question do not start another diagnosis. Regular messages, replies without an explicit mention, bots, webhooks, and other channels do not trigger consultation. Up to three PNG, JPEG, or WebP images are supported per question, with a combined size of 20 MB. The bot immediately posts a thinking status for accepted questions, updates it during Wiki queries or AI rate-limit waits, and replaces it with the answer or error. Long answers continue in additional replies. If the status message was deleted, the result is sent as a new reply.
-
-Screenshots are read once with a small vision-only request, then their validated text observations are used for Wiki queries and diagnosis. Original images are not resent during subsequent AI requests. Unreadable rune names or base stats remain uncertain; icon-only screenshots may require rune names or detail screenshots before a complete recommendation. Image questions permit two rounds of tool requests before summarizing confirmed findings and asking for missing information. A request that exceeds the provider's capacity is reported as a data-size issue rather than an invalid API key.
-
-For more accurate input with less AI traffic, configure your dinosaur in the [Wiki simulator](https://dino-mutant-wiki.vercel.app/), press **分享**, and paste the complete link after an explicit bot mention with your question. Include a **符文清單** share link when asking which owned runes to swap. The bot locally decodes the URL fragment into rune IDs, levels, activation toggles, base stats, and extra bonuses; it does not fetch arbitrary URLs or access browser-local saved builds. Up to two distinct loadouts and two inventory lists can be included. A matchup link can supply both loadouts, and duplicate individual links are deduplicated. Missing stats or activation toggles remain missing; unsupported or malformed data asks for a new share link instead of filling website defaults. Full links must include the data after `#`.
-
-Shared loadouts are calculated through Wiki MCP before the AI request, so panel questions can be explained in one AI call without image recognition or AI planning for the initial calculation. Inventory names are resolved locally from Wiki results, and up to eight distinct current-level rune records are prefetched; larger inventories preload equipped runes and query other candidates as needed. Follow-up questions can reuse the most recent shared configuration in the member's retained history; shared questions use only the latest exchange as short context and allow at most two additional tool rounds. Panel results are not PvP win-rate predictions, and material quantities are still needed for affordable upgrade recommendations. The six-section diagnosis template and existing question quotas continue to apply. Invalid share links receive correction instructions before reserving a daily question or cooldown.
-
-Each member can submit one question at a time, with a 60-second minimum interval and 10 questions per day across all channels and servers. The entire bot has a 100-question daily budget and processes one consultation at a time. Daily usage persists across restarts and resets at midnight in Asia/Taipei. A question counts when accepted for processing, including attempts that later fail; invalid inputs, cooldown rejections and busy replies do not consume quota. Administrators can inspect usage with `/rune-dr status`. Configure these limits through `CONSULTATION_COOLDOWN_SECONDS`, `CONSULTATION_USER_DAILY_LIMIT`, `CONSULTATION_BOT_DAILY_LIMIT`, and `CONSULTATION_MAX_CONCURRENT` (1–3). Groq rate-limit waits of up to 60 seconds are retried according to the provider's `Retry-After` header, within an overall two-minute request timeout. These are question limits, rather than provider token or request budgets; a question may require several AI requests. Provider limit errors are identified separately from the member's daily question quota. The AI is given compact game guidance and instructed to fetch only small searches and the requested rune levels; oversized tool results request a narrower query instead of being forwarded wholesale.
-
-Questions and images are sent to the configured AI provider; query arguments are sent to the Wiki MCP. Tell members before enabling the feature. Follow-up context is kept separately for each member in each channel, limited to four exchanges, and expires after 20 minutes or a bot restart. The bot does not retrieve other members' chat history. The AI may ask for base stats, rune levels, ownership, or activation conditions before calculating a recommendation. Only the Wiki's four inspected query/calculation tools are available.
-
-This mention-only feature uses the standard Guild Messages intent and does not itself require Message Content Intent. Automatic channel translation still requires Message Content Intent.
-
 ## Recurring events
 
 Create the first event with Discord's native scheduled-event interface, then configure recurrence:
