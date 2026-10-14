@@ -20,24 +20,38 @@ export function startConsultationFeature(
   const limits = consultationLimits()
   const active = new Set<string>()
   const lastRequest = new Map<string, number>()
+  const processed = new Map<string, number>()
   const conversations = new Map<
     string,
     { updatedAt: number; turns: ConsultationTurn[] }
   >()
   const retentionMs = 20 * 60_000
 
-  async function reply(message: Message<true>, text: string) {
-    for (const payload of translationPayloads(
+  async function reply(
+    message: Message<true>,
+    text: string,
+    status?: Message<true>,
+  ) {
+    for (const [index, payload] of translationPayloads(
       `🩺 **dr.大暴龍｜符文診斷**\n${text}`,
-    )) {
-      await message.reply({
+    ).entries()) {
+      const options = {
         ...payload,
-        allowedMentions: { parse: [], repliedUser: false },
-      })
+        allowedMentions: { parse: [] as const, repliedUser: false },
+      }
+      if (index === 0 && status) {
+        try {
+          await status.edit(options)
+          continue
+        } catch {
+          await status.delete().catch(() => {})
+        }
+      }
+      await message.reply(options)
     }
   }
 
-  client.on(Events.MessageCreate, async (message) => {
+  async function handleMessage(message: Message) {
     const botId = client.user?.id
     if (!botId || !message.inGuild() || message.author.bot || message.webhookId)
       return
@@ -90,6 +104,10 @@ export function startConsultationFeature(
       const key = `${message.guildId}:${message.channelId}:${message.author.id}`
       const userId = message.author.id
       const now = Date.now()
+      for (const [id, timestamp] of processed) {
+        if (now - timestamp > retentionMs) processed.delete(id)
+      }
+      if (processed.has(message.id)) return
       for (const [entry, timestamp] of lastRequest) {
         if (now - timestamp > retentionMs) lastRequest.delete(entry)
       }
@@ -121,6 +139,7 @@ export function startConsultationFeature(
           void message.channel.sendTyping().catch(() => {})
       }, 8000)
       typing.unref()
+      let status: Message<true> | undefined
       try {
         const day = consultationDay(now)
         if (
@@ -140,16 +159,36 @@ export function startConsultationFeature(
           )
           return
         }
+        processed.set(message.id, now)
+        if (processed.size > 500)
+          processed.delete(processed.keys().next().value as string)
         lastRequest.set(userId, now)
+        status = await message.reply({
+          content:
+            '🩺 **dr.大暴龍｜符文診斷**\n⏳ 正在思考並查詢 Wiki，請稍候…',
+          allowedMentions: { parse: [], repliedUser: false },
+        })
         if ('sendTyping' in message.channel)
           await message.channel.sendTyping().catch(() => {})
         const history = conversations.get(key)?.turns ?? []
-        const result = await answer({
-          text,
-          images: images.map((image) => image.url),
-          history,
-        })
-        await reply(message, result)
+        const result = await answer(
+          {
+            text,
+            images: images.map((image) => image.url),
+            history,
+          },
+          {
+            onProgress: async (text) => {
+              await status
+                ?.edit({
+                  content: `🩺 **dr.大暴龍｜符文診斷**\n${text}`,
+                  allowedMentions: { parse: [], repliedUser: false },
+                })
+                .catch(() => {})
+            },
+          },
+        )
+        await reply(message, result, status)
         conversations.delete(key)
         conversations.set(key, {
           updatedAt: Date.now(),
@@ -166,6 +205,7 @@ export function startConsultationFeature(
           error instanceof ConsultationError
             ? error.message
             : '諮詢暫時無法完成，請稍後再試。',
+          status,
         )
       } finally {
         clearInterval(typing)
@@ -177,6 +217,19 @@ export function startConsultationFeature(
         '[consult] Could not process or deliver a consultation reply',
       )
     }
+  }
+  client.on(Events.MessageCreate, handleMessage)
+  client.on(Events.MessageUpdate, async (before, after) => {
+    const botId = client.user?.id
+    // Only a first explicit mention added to a cached message starts a diagnosis.
+    if (
+      !botId ||
+      before.partial ||
+      after.partial ||
+      new RegExp(`<@!?${botId}>`).test(before.content)
+    )
+      return
+    await handleMessage(after)
   })
   console.log(
     `[consult] Feature ready (mention-only, model=${consultationConfig().model})`,
