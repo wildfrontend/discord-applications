@@ -117,6 +117,7 @@ export async function createNextOccurrence(
       schedule.id,
       created.id,
       created.scheduledStartTimestamp,
+      created.scheduledEndTimestamp,
     )
   }
 
@@ -142,6 +143,7 @@ export async function createRecurringSchedule(
         schedule.id,
         source.id,
         source.scheduledStartTimestamp,
+        source.scheduledEndTimestamp,
       )
     }
     const withNextOccurrence = await createNextOccurrence(client, schedule)

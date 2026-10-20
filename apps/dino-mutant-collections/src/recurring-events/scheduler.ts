@@ -1,7 +1,12 @@
-import type { Client } from 'discord.js'
+import { type Client, GuildScheduledEventStatus } from 'discord.js'
 import { sendDueEventReminders } from './reminders.js'
 import { createNextOccurrence, recurrenceMilliseconds } from './service.js'
-import { eventReminderStore, recurringEventStore } from './store.js'
+import {
+  eventNotificationStore,
+  eventReminderStore,
+  nativeScheduleId,
+  recurringEventStore,
+} from './store.js'
 
 const CHECK_INTERVAL_MS = 1_000
 const CACHE_REFRESH_INTERVAL_MS = 5 * 60_000
@@ -34,8 +39,28 @@ async function refreshScheduledEventCaches(client: Client): Promise<void> {
           schedule.id,
           id,
           event.scheduledStartTimestamp,
+          event.scheduledEndTimestamp,
         )
       }
+    }
+  }
+  // Discord 原生重複活動結束後會沿用同一個 ID 並更新為下一場的開始時間。
+  for (const settings of await eventNotificationStore.listNative()) {
+    if (!settings.enabled) continue
+    const event = client.guilds.cache
+      .get(settings.guildId)
+      ?.scheduledEvents.cache.get(settings.eventId)
+    if (
+      event?.status === GuildScheduledEventStatus.Scheduled &&
+      event.scheduledStartTimestamp &&
+      event.scheduledStartTimestamp > Date.now()
+    ) {
+      await eventReminderStore.trackOccurrence(
+        nativeScheduleId(event.id),
+        event.id,
+        event.scheduledStartTimestamp,
+        event.scheduledEndTimestamp,
+      )
     }
   }
 }

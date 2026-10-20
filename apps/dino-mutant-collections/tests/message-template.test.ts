@@ -31,6 +31,26 @@ test('prepends the selected role if omitted and removes empty role lines', () =>
   )
 })
 
+test('uses phase-specific defaults and exposes status and end fields', () => {
+  const withEnd = { ...event, scheduledEndTimestamp: 1_800_014_400_000 }
+  assert.equal(
+    renderReminderMessage(withEnd, null, null, 'during'),
+    '**活動進行中｜Raid \\*night\\* {url}**\n結束：<t:1800014400:F>（<t:1800014400:R>）\nhttps://discord.com/events/111/222',
+  )
+  assert.ok(
+    renderReminderMessage(withEnd, null, null, 'end').startsWith(
+      '**活動即將結束｜',
+    ),
+  )
+  const template = '{name}{status}，{end_relative}'
+  validateReminderTemplate(template, null)
+  assert.equal(
+    renderReminderMessage(withEnd, null, template, 'end'),
+    'Raid \\*night\\* {url}即將結束，<t:1800014400:R>',
+  )
+  assert.equal(renderReminderMessage(event, null, '{end}', 'during'), '未設定')
+})
+
 test('rejects unknown fields, empty output, and oversized expanded messages', () => {
   assert.throws(() => validateReminderTemplate('{activity}', null), /不支援/)
   assert.throws(() => validateReminderTemplate(' ', null), /不可空白/)

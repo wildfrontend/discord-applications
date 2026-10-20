@@ -40,8 +40,12 @@ legacy.exec(`
 `)
 legacy.close()
 
-const { eventNotificationStore, eventReminderStore, recurringEventStore } =
-  await import('../src/recurring-events/store.js')
+const {
+  eventNotificationStore,
+  eventReminderStore,
+  nativeScheduleId,
+  recurringEventStore,
+} = await import('../src/recurring-events/store.js')
 const { buildSchedule, createRecurringSchedule } = await import(
   '../src/recurring-events/service.js'
 )
@@ -350,6 +354,136 @@ test('scheduler seeds reminders for existing schedules on startup', async () => 
   }
 })
 
+test('Discord native recurring events remind every occurrence until disabled', async () => {
+  const f = fixture(60)
+  Object.assign(f.event, { recurrenceRule: { frequency: 2, interval: 1 } })
+  const scheduleId = nativeScheduleId(f.event.id)
+  const week = 7 * 24 * 60 * minute
+  await eventNotificationStore.set(f.guildId, 'shared', 'admin')
+  await eventNotificationStore.set(f.guildId, 'native-channel', 'admin', {
+    scheduleId,
+    remindBeforeMinutes: 30,
+  })
+  await eventReminderStore.trackOccurrence(
+    scheduleId,
+    f.event.id,
+    f.event.scheduledStartTimestamp,
+  )
+  await sendDueEventReminders(f.client)
+  assert.equal(f.sent.length, 0)
+  now += 30 * minute
+  await sendDueEventReminders(f.client)
+  assert.equal(f.sent.length, 1)
+  assert.equal(f.sent[0].channelId, 'native-channel')
+
+  // Discord 沿用同一個活動 ID，把開始時間更新到下一場。
+  f.event.scheduledStartTimestamp += week
+  f.event.scheduledEndTimestamp += week
+  now = f.event.scheduledStartTimestamp - 20 * minute
+  const stop = startRecurringEventScheduler(f.client)
+  try {
+    for (let i = 0; i < 100 && f.sent.length === 1; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+  } finally {
+    stop()
+  }
+  assert.equal(f.sent.length, 2)
+  await sendDueEventReminders(f.client)
+  assert.equal(f.sent.length, 2)
+
+  await eventNotificationStore.remove(f.guildId, scheduleId)
+  f.event.scheduledStartTimestamp += week
+  f.event.scheduledEndTimestamp += week
+  now = f.event.scheduledStartTimestamp - 20 * minute
+  await eventReminderStore.trackOccurrence(
+    scheduleId,
+    f.event.id,
+    f.event.scheduledStartTimestamp,
+  )
+  await sendDueEventReminders(f.client)
+  assert.equal(f.sent.length, 2)
+  assert.deepEqual(await eventNotificationStore.listNative(f.guildId), [])
+})
+
+test('day-long events remind during the event and before it ends without backlog spam', async () => {
+  const hour = 60 * minute
+  for (const mode of ['online', 'offline'] as const) {
+    const f = fixture(10)
+    f.event.scheduledEndTimestamp = f.event.scheduledStartTimestamp + 12 * hour
+    await recurringEventStore.add(f.schedule)
+    await eventNotificationStore.set(f.guildId, 'day-channel', 'admin', {
+      scheduleId: f.schedule.id,
+      remindBeforeMinutes: 0,
+      remindBeforeEndMinutes: 30,
+      repeatEveryMinutes: 240,
+    })
+    await eventReminderStore.track(
+      f.schedule.id,
+      f.event.id,
+      f.event.scheduledStartTimestamp,
+      f.event.scheduledEndTimestamp,
+    )
+    const start = f.event.scheduledStartTimestamp
+    if (mode === 'online') {
+      for (const at of [start - 5 * minute, start + hour]) {
+        now = at
+        await sendDueEventReminders(f.client)
+      }
+      assert.equal(f.sent.length, 0, 'no start reminder when before is 0')
+      for (const at of [start + 4 * hour, start + 4 * hour + minute]) {
+        now = at
+        await sendDueEventReminders(f.client)
+      }
+      assert.equal(f.sent.length, 1)
+      assert.match(f.sent[0].payload.content, /^\*\*活動進行中｜/)
+      now = start + 8 * hour
+      await sendDueEventReminders(f.client)
+      assert.equal(f.sent.length, 2)
+    } else {
+      // Bot 離線錯過 4 小時與 8 小時的提醒，恢復後只補最新一則。
+      now = start + 9 * hour
+      await sendDueEventReminders(f.client)
+      await sendDueEventReminders(f.client)
+      assert.equal(f.sent.length, 1)
+    }
+    const sentBeforeEnd = f.sent.length
+    now = start + 11 * hour + 30 * minute
+    await sendDueEventReminders(f.client)
+    assert.equal(f.sent.length, sentBeforeEnd + 1)
+    assert.match(f.sent.at(-1)?.payload.content ?? '', /^\*\*活動即將結束｜/)
+    now = start + 12 * hour - minute
+    await sendDueEventReminders(f.client)
+    assert.equal(f.sent.length, sentBeforeEnd + 1, mode)
+  }
+})
+
+test('adding reminders after delivery reopens the in-progress occurrence', async () => {
+  const f = fixture(10)
+  await recurringEventStore.add(f.schedule)
+  await eventNotificationStore.set(f.guildId, 'channel', 'admin', {
+    scheduleId: f.schedule.id,
+  })
+  await eventReminderStore.track(
+    f.schedule.id,
+    f.event.id,
+    f.event.scheduledStartTimestamp,
+    f.event.scheduledEndTimestamp,
+  )
+  await sendDueEventReminders(f.client)
+  assert.equal(f.sent.length, 1)
+  now += 20 * minute
+  await sendDueEventReminders(f.client)
+  await eventNotificationStore.set(f.guildId, 'channel', 'admin', {
+    scheduleId: f.schedule.id,
+    remindBeforeEndMinutes: 15,
+  })
+  now = f.event.scheduledEndTimestamp - 10 * minute
+  await sendDueEventReminders(f.client)
+  assert.equal(f.sent.length, 2)
+  assert.match(f.sent[1].payload.content, /活動即將結束/)
+})
+
 test('skips started/cancelled events and checks edits before sending', async () => {
   for (const mode of [
     'started',
@@ -454,6 +588,8 @@ test('command validates Manage Events and role mention permission before saving'
     'valid',
     'custom',
     'invalid-message',
+    'timing',
+    'no-timing',
   ] as const) {
     const guildId = `permissions-${mode}`
     const responses: string[] = []
@@ -461,7 +597,7 @@ test('command validates Manage Events and role mention permission before saving'
       content: string
       allowedMentions: { parse: string[] }
     }> = []
-    const canMention = ['valid', 'custom', 'invalid-message'].includes(mode)
+    const canMention = !['unauthorized', 'cannot-mention'].includes(mode)
     const role = { id: 'role', mentionable: false, toString: () => '<@&role>' }
     const channel = {
       id: 'channel',
@@ -492,7 +628,16 @@ test('command validates Manage Events and role mention permission before saving'
                 ? '{wrong}'
                 : null
             : null,
-        getInteger: () => 60,
+        getInteger: (name: string) =>
+          mode === 'timing'
+            ? ({ end_before: 30, every: 240 }[name] ?? null)
+            : mode === 'no-timing'
+              ? name === 'before'
+                ? 0
+                : null
+              : name === 'before'
+                ? 60
+                : null,
         getChannel: () => channel,
         getRole: () => role,
       },
@@ -509,7 +654,17 @@ test('command validates Manage Events and role mention permission before saving'
     }
     await eventCommand.execute(interaction as never)
     const settings = await eventNotificationStore.get(guildId)
-    assert.equal(settings !== null, mode === 'valid' || mode === 'custom')
+    assert.equal(
+      settings !== null,
+      ['valid', 'custom', 'timing'].includes(mode),
+    )
+    if (mode === 'timing') {
+      assert.equal(settings?.remindBeforeMinutes, 0)
+      assert.equal(settings?.remindBeforeEndMinutes, 30)
+      assert.equal(settings?.repeatEveryMinutes, 240)
+      assert.match(responses[0], /進行中每 4 小時、結束前 30 分鐘/)
+    }
+    if (mode === 'no-timing') assert.match(responses[0], /至少設定一種提醒/)
     if (mode === 'unauthorized') assert.match(responses[0], /管理活動/)
     if (mode === 'cannot-mention') assert.match(responses[0], /無法標註/)
     if (mode === 'valid') assert.equal(settings?.remindBeforeMinutes, 60)
