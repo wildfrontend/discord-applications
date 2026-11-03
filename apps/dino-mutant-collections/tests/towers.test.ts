@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
@@ -17,6 +18,7 @@ import {
   parseShieldDuration,
   parseTowerRecognition,
   renderTowerSummary,
+  resolveTowerTime,
   type TowerArea,
   type TowerRecognition,
   towerAreas,
@@ -27,6 +29,28 @@ process.env.BOT_DATA_DIR = dataDirectory
 process.env.DATABASE_DRIVER = 'sqlite'
 process.env.AI_MIN_REQUEST_INTERVAL_MS = '0'
 delete process.env.DATABASE_URL
+const legacy = new DatabaseSync(join(dataDirectory, 'towers.sqlite'))
+legacy.exec(`CREATE TABLE tower_observations (
+  binding_id TEXT NOT NULL, area INTEGER NOT NULL, server_number INTEGER NOT NULL,
+  occupying_tribe TEXT NOT NULL, remaining_seconds INTEGER NOT NULL,
+  observed_at INTEGER NOT NULL, available_at INTEGER NOT NULL,
+  source_message_id TEXT NOT NULL, source_attachment_id TEXT NOT NULL,
+  PRIMARY KEY (binding_id, area)
+)`)
+legacy
+  .prepare('INSERT INTO tower_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+  .run(
+    'legacy',
+    19,
+    27,
+    '[OLD] Owner',
+    3600,
+    1793685600000,
+    1793689200000,
+    'old-message',
+    'old-attachment',
+  )
+legacy.close()
 const { towerStore } = await import('../src/towers/store.js')
 const { handleTowerMessage, startTowerFeature } = await import(
   '../src/towers/feature.js'
@@ -87,6 +111,104 @@ test('reads zero-padded map server, occupying tribe and a countdown longer than 
     314818,
   ]) {
     assert.equal(parseShieldDuration(value), null)
+  }
+})
+
+test('migrates old upload-based observations without changing their availability', async () => {
+  const [item] = await towerStore.list({
+    id: 'legacy',
+    guildId: 'guild',
+    channelId: 'legacy',
+    serverNumber: 27,
+  })
+  assert.equal(item.observedAt, 1793685600000)
+  assert.equal(item.uploadedAt, item.observedAt)
+  assert.equal(item.availableAt, 1793689200000)
+  assert.equal(item.timeBasis, 'upload')
+  assert.equal(item.clock, undefined)
+})
+
+test('extracts optional right-corner clock data without guessing an unreadable UTC label', () => {
+  const result = parseTowerRecognition({
+    ...rawReading,
+    clockTime: '07:11',
+    clockIsUtc: true,
+  })
+  assert.equal(result.kind, 'tower')
+  assert.deepEqual(result.reading.clock, { time: '07:11', isUtc: true })
+  for (const clock of [
+    { clockTime: '24:01', clockIsUtc: true },
+    { clockTime: '07:11', clockIsUtc: null },
+    { clockTime: null, clockIsUtc: false },
+  ]) {
+    assert.deepEqual(
+      parseTowerRecognition({ ...rawReading, ...clock }),
+      recognized(),
+    )
+  }
+})
+
+test('uses a labelled UTC clock to compensate upload delay and handle UTC midnight', () => {
+  const upload = Date.parse('2026-11-03T07:16:42Z')
+  assert.deepEqual(resolveTowerTime({ time: '07:11', isUtc: true }, upload), {
+    observedAt: Date.parse('2026-11-03T07:11:00Z'),
+    timeBasis: 'utc-clock',
+  })
+  assert.deepEqual(
+    resolveTowerTime(
+      { time: '23:58', isUtc: true },
+      Date.parse('2026-11-04T00:03:42Z'),
+    ),
+    {
+      observedAt: Date.parse('2026-11-03T23:58:00Z'),
+      timeBasis: 'utc-clock',
+    },
+  )
+  const result = recognized()
+  assert.equal(result.kind, 'tower')
+  const item = observeTower(
+    { ...result.reading, clock: { time: '07:11', isUtc: true } },
+    upload,
+    'msg',
+    'att',
+  )
+  assert.equal(item.uploadedAt, upload)
+  assert.equal(item.availableAt, Date.parse('2026-11-03T07:11:00Z') + 114498000)
+})
+
+test('estimates recent local-clock minute delays across whole, half-hour and quarter-hour offsets', () => {
+  const upload = Date.parse('2026-11-03T07:16:42Z')
+  for (const time of ['15:11', '12:41', '12:56', '02:11']) {
+    assert.deepEqual(resolveTowerTime({ time, isUtc: false }, upload), {
+      observedAt: Date.parse('2026-11-03T07:11:00Z'),
+      timeBasis: 'minute-estimate',
+    })
+  }
+  assert.deepEqual(
+    resolveTowerTime(
+      { time: '21:58', isUtc: false },
+      Date.parse('2026-11-04T00:03:42Z'),
+    ),
+    {
+      observedAt: Date.parse('2026-11-03T23:58:00Z'),
+      timeBasis: 'minute-estimate',
+    },
+  )
+})
+
+test('falls back to upload time for missing clocks, stale/future UTC readings, or excessive minute lag', () => {
+  const upload = Date.parse('2026-11-03T07:16:42Z')
+  for (const clock of [
+    undefined,
+    { time: 'bad', isUtc: true },
+    { time: '06:40', isUtc: true },
+    { time: '07:20', isUtc: true },
+    { time: '15:05', isUtc: false },
+  ]) {
+    assert.deepEqual(resolveTowerTime(clock, upload), {
+      observedAt: upload,
+      timeBasis: 'upload',
+    })
   }
 })
 
@@ -297,6 +419,65 @@ test('rejects oversized or unsupported images and URLs outside Discord before ca
   }
   assert.equal(f.calls(), 0)
   assert.equal((await towerStore.list(await f.binding())).length, 0)
+})
+
+test('compares calibrated capture minutes so an older photo uploaded later cannot replace newer records', async () => {
+  const f = await fixture()
+  const binding = await f.binding()
+  const result = recognized()
+  assert.equal(result.kind, 'tower')
+  const latest = observeTower(
+    { ...result.reading, clock: { time: '07:15', isUtc: true } },
+    Date.parse('2026-11-03T07:16:42Z'),
+    'new',
+    '100',
+  )
+  assert.equal(await towerStore.save(binding, latest), true)
+  assert.deepEqual(await towerStore.list(binding), [latest])
+  const lateOldImage = observeTower(
+    {
+      ...result.reading,
+      occupyingTribe: '[OLD] Owner',
+      clock: { time: '07:11', isUtc: true },
+    },
+    Date.parse('2026-11-03T07:20:42Z'),
+    'late',
+    '101',
+  )
+  assert.equal(await towerStore.save(binding, lateOldImage), false)
+  assert.deepEqual(await towerStore.list(binding), [latest])
+  // Seconds are absent in the image clock; newer uploads break same-minute ties.
+  const sameMinute = observeTower(
+    {
+      ...result.reading,
+      remainingSeconds: 114490,
+      clock: { time: '07:15', isUtc: true },
+    },
+    Date.parse('2026-11-03T07:17:00Z'),
+    'same-minute',
+    '102',
+  )
+  assert.equal(await towerStore.save(binding, sameMinute), true)
+  assert.deepEqual(await towerStore.list(binding), [sameMinute])
+})
+
+test('processing preserves clock metadata and exposes the estimate basis in localized summaries', async () => {
+  const f = await fixture()
+  const result = recognized()
+  assert.equal(result.kind, 'tower')
+  f.message.createdTimestamp = Date.parse('2026-11-03T07:16:42Z')
+  f.respond({
+    ...result,
+    reading: { ...result.reading, clock: { time: '12:56', isUtc: false } },
+  })
+  await f.handle()
+  const [item] = await towerStore.list(await f.binding())
+  assert.equal(item.timeBasis, 'minute-estimate')
+  assert.equal(item.observedAt, Date.parse('2026-11-03T07:11:00Z'))
+  assert.deepEqual(item.clock, { time: '12:56', isUtc: false })
+  assert.match(f.replies[0].content, /分鐘推估/)
+  assert.match(f.replies[0].content, /10 分鐘/)
+  assert.equal(f.deleted(), 1)
 })
 
 test('newer uploads replace the owner; duplicates and older completed work cannot overwrite them', async () => {

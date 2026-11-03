@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { configureDatabase, createDatabase } from '../database.js'
-import type { TowerArea, TowerObservation } from './service.js'
+import type { TowerArea, TowerObservation, TowerTimeBasis } from './service.js'
 
 export interface TowerBinding {
   id: string
@@ -36,10 +36,33 @@ await database.batch(
     available_at INTEGER NOT NULL,
     source_message_id TEXT NOT NULL,
     source_attachment_id TEXT NOT NULL,
+    uploaded_at INTEGER NOT NULL DEFAULT 0,
+    time_basis TEXT NOT NULL DEFAULT 'upload',
+    clock_time TEXT,
+    clock_is_utc INTEGER,
     PRIMARY KEY (binding_id, area)
   )`,
   ],
   'write',
+)
+
+const observationColumns = await database.execute(
+  'PRAGMA table_info(tower_observations)',
+)
+for (const [name, definition] of [
+  ['uploaded_at', 'INTEGER NOT NULL DEFAULT 0'],
+  ['time_basis', "TEXT NOT NULL DEFAULT 'upload'"],
+  ['clock_time', 'TEXT'],
+  ['clock_is_utc', 'INTEGER'],
+] as const) {
+  if (!observationColumns.rows.some((row) => row.name === name)) {
+    await database.execute(
+      `ALTER TABLE tower_observations ADD COLUMN ${name} ${definition}`,
+    )
+  }
+}
+await database.execute(
+  'UPDATE tower_observations SET uploaded_at = observed_at WHERE uploaded_at = 0',
 )
 
 export const towerStore = {
@@ -130,15 +153,20 @@ export const towerStore = {
     // The binding check also rejects AI work that finished after a channel was rebound/disabled.
     const result = await database.execute({
       sql: `INSERT INTO tower_observations (binding_id, area, server_number, occupying_tribe,
-          remaining_seconds, observed_at, available_at, source_message_id, source_attachment_id)
-        SELECT binding_id, ?, ?, ?, ?, ?, ?, ?, ? FROM tower_channels
+          remaining_seconds, observed_at, available_at, source_message_id, source_attachment_id,
+          uploaded_at, time_basis, clock_time, clock_is_utc)
+        SELECT binding_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM tower_channels
         WHERE binding_id = ? AND guild_id = ? AND channel_id = ? AND server_number = ?
         ON CONFLICT(binding_id, area) DO UPDATE SET
           occupying_tribe = excluded.occupying_tribe, remaining_seconds = excluded.remaining_seconds,
           observed_at = excluded.observed_at, available_at = excluded.available_at,
-          source_message_id = excluded.source_message_id, source_attachment_id = excluded.source_attachment_id
-        WHERE excluded.observed_at > tower_observations.observed_at OR
-          (excluded.observed_at = tower_observations.observed_at AND excluded.source_attachment_id > tower_observations.source_attachment_id)`,
+          source_message_id = excluded.source_message_id, source_attachment_id = excluded.source_attachment_id,
+          uploaded_at = excluded.uploaded_at, time_basis = excluded.time_basis,
+          clock_time = excluded.clock_time, clock_is_utc = excluded.clock_is_utc
+        WHERE (excluded.observed_at / 60000) > (tower_observations.observed_at / 60000) OR
+          ((excluded.observed_at / 60000) = (tower_observations.observed_at / 60000) AND
+            (excluded.uploaded_at > tower_observations.uploaded_at OR
+              (excluded.uploaded_at = tower_observations.uploaded_at AND excluded.source_attachment_id > tower_observations.source_attachment_id)))`,
       args: [
         item.area,
         item.serverNumber,
@@ -148,6 +176,10 @@ export const towerStore = {
         item.availableAt,
         item.sourceMessageId,
         item.sourceAttachmentId,
+        item.uploadedAt,
+        item.timeBasis,
+        item.clock?.time ?? null,
+        item.clock ? (item.clock.isUtc ? 1 : 0) : null,
         binding.id,
         binding.guildId,
         binding.channelId,
@@ -168,9 +200,19 @@ export const towerStore = {
       occupyingTribe: String(row.occupying_tribe),
       remainingSeconds: Number(row.remaining_seconds),
       observedAt: Number(row.observed_at),
+      uploadedAt: Number(row.uploaded_at),
+      timeBasis: String(row.time_basis) as TowerTimeBasis,
       availableAt: Number(row.available_at),
       sourceMessageId: String(row.source_message_id),
       sourceAttachmentId: String(row.source_attachment_id),
+      ...(typeof row.clock_time === 'string' && row.clock_is_utc !== null
+        ? {
+            clock: {
+              time: row.clock_time,
+              isUtc: Number(row.clock_is_utc) === 1,
+            },
+          }
+        : {}),
     }))
   },
 }
