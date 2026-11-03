@@ -32,6 +32,7 @@ const { handleTowerMessage, startTowerFeature } = await import(
   '../src/towers/feature.js'
 )
 const { towerImageClient } = await import('../src/towers/ai-client.js')
+const { towerLanguage } = await import('../src/towers/i18n.js')
 const { default: towerCommand } = await import('../src/commands/tower.js')
 const { closeDatabases } = await import('../src/database.js')
 
@@ -120,7 +121,7 @@ test('adds only the remaining countdown to upload time and renders all eight tow
     formatJapaneseTime(Date.parse('2026-12-31T15:00:00Z')),
     '01/01 00:00',
   )
-  const summary = renderTowerSummary(27, [item])
+  const summary = renderTowerSummary(27, [item], 'zt')
   assert.match(summary, /日本時間 \(UTC\+9\)/)
   assert.deepEqual(
     summary
@@ -132,13 +133,20 @@ test('adds only the remaining countdown to upload time and renders all eight tow
   assert.equal(summary.match(/（留空）/g)?.length, 7)
   assert.ok(summary.includes('27-19 [PRIZE] STONE 11/05 01:00'))
   assert.ok(summary.includes(`<t:${item.availableAt / 1000}:R>`))
-  assert.equal(renderTowerSummary(28, [item]).match(/（留空）/g)?.length, 8)
+  assert.equal(
+    renderTowerSummary(28, [item], 'zt').match(/（留空）/g)?.length,
+    8,
+  )
 })
 
 let counter = 0
-async function fixture(bound = true) {
+async function fixture(bound = true, locale: string | null = 'zh-TW') {
   const channelId = `channel-${++counter}`
+  const userId = `user-${counter}`
+  if (locale) await towerStore.rememberLocale(userId, locale)
   const replies: Array<{ content: string; allowedMentions: object }> = []
+  const operations: string[] = []
+  let deleted = 0
   let calls = 0
   let response: TowerRecognition = recognized()
   const attachment = (id = '100') => ({
@@ -153,12 +161,30 @@ async function fixture(bound = true) {
     guildId: 'guild',
     channelId,
     inGuild: () => true,
-    author: { bot: false },
+    author: { id: userId, bot: false },
+    content: '',
     webhookId: null,
     createdTimestamp: uploadedAt,
     attachments: new Collection([['100', attachment()]]),
-    reply: async (payload: { content: string; allowedMentions: object }) => {
-      replies.push(payload)
+    channel: {
+      send: async (payload: { content: string; allowedMentions: object }) => {
+        operations.push('sent')
+        replies.push(payload)
+        return {
+          edit: async (update: { content: string }) => {
+            Object.assign(payload, update)
+          },
+        }
+      },
+    },
+    reply: async () => {
+      throw new Error('Do not reply to source images')
+    },
+    deletable: true,
+    fetch: async (_force: boolean) => message,
+    delete: async () => {
+      operations.push('deleted')
+      deleted++
     },
   }
   if (bound) await towerStore.bind('guild', channelId, 27, 'admin')
@@ -173,6 +199,8 @@ async function fixture(bound = true) {
     client,
     attachment,
     replies,
+    operations,
+    deleted: () => deleted,
     calls: () => calls,
     respond: (result: TowerRecognition) => {
       response = result
@@ -241,17 +269,18 @@ test('other servers, unreadable fields, unrelated images and provider errors do 
   assert.match(f.replies.at(-1)?.content ?? '', /只記錄 27 服/)
   f.respond({ kind: 'unreadable' })
   await f.handle()
-  assert.match(f.replies.at(-1)?.content ?? '', /未記錄/)
+  assert.match(f.replies.at(-1)?.content ?? '', /無法解析/)
   f.respond({ kind: 'unrelated' })
   const count = f.replies.length
   await f.handle()
-  assert.equal(f.replies.length, count)
+  assert.equal(f.replies.length, count + 1)
+  assert.match(f.replies.at(-1)?.content ?? '', /無法解析/)
   await handleTowerMessage(f.message as never, {
     recognize: async () => {
       throw new Error('provider failure')
     },
   })
-  assert.match(f.replies.at(-1)?.content ?? '', /辨識失敗/)
+  assert.match(f.replies.at(-1)?.content ?? '', /無法解析/)
   assert.deepEqual(await towerStore.list(await f.binding()), original)
 })
 
@@ -423,6 +452,7 @@ test('setup requires Manage Channels while regular members can list the configur
     guild: { channels: { fetch: async () => channel }, members: { me: {} } },
     member: {},
     user: { id: 'admin' },
+    locale: 'zh-TW',
     options: {
       getSubcommand: () => action,
       getChannel: () => null,
@@ -472,16 +502,21 @@ test('the event listener catches rejected work and continues handling later mess
   try {
     listener({
       ...f.message,
-      reply: async () => {
-        throw new Error('reply unavailable')
+      channel: {
+        send: async () => {
+          throw new Error('reply unavailable')
+        },
       },
     })
     listener({
       ...f.message,
       id: 'second',
       createdTimestamp: uploadedAt + 1000,
-      reply: async () => {
-        completed.resolve()
+      channel: {
+        send: async () => {
+          completed.resolve()
+          return { edit: async () => {} }
+        },
       },
     })
     await completed.promise
@@ -493,6 +528,160 @@ test('the event listener catches rejected work and continues handling later mess
   } finally {
     towerImageClient.recognize = originalRecognize
   }
+})
+
+test('successful image posts are removed only after the text result is sent, including captions', async () => {
+  const f = await fixture()
+  f.message.content = '27-19 update'
+  await f.handle()
+  assert.deepEqual(f.operations, ['sent', 'deleted'])
+  assert.equal(f.deleted(), 1)
+  assert.equal((await towerStore.list(await f.binding())).length, 1)
+})
+
+test('failed, unrelated, unsupported, and wrong-server image posts are also removed', async () => {
+  for (const result of [
+    { kind: 'unreadable' },
+    { kind: 'unrelated' },
+    recognized(19, 28),
+  ] as TowerRecognition[]) {
+    const f = await fixture()
+    f.respond(result)
+    await f.handle()
+    assert.equal(f.deleted(), 1)
+    assert.equal((await towerStore.list(await f.binding())).length, 0)
+    assert.match(
+      f.replies[0].content,
+      result.kind === 'tower' ? /其他伺服器/ : /無法解析/,
+    )
+  }
+  const unsupported = await fixture()
+  unsupported.message.attachments.set('100', {
+    ...unsupported.attachment(),
+    size: 21 * 1024 * 1024,
+  })
+  await unsupported.handle()
+  assert.equal(unsupported.deleted(), 1)
+  assert.equal(unsupported.calls(), 0)
+  const failed = await fixture()
+  await handleTowerMessage(failed.message as never, {
+    recognize: async () => {
+      throw new Error('AI unavailable')
+    },
+  })
+  assert.equal(failed.deleted(), 1)
+  assert.match(failed.replies[0].content, /無法解析/)
+})
+
+test('posting failures retain source images, while deletion failures preserve the completed result', async () => {
+  const f = await fixture()
+  await assert.rejects(
+    handleTowerMessage(
+      {
+        ...f.message,
+        channel: {
+          send: async () => {
+            throw new Error('send failed')
+          },
+        },
+      } as never,
+      f.client,
+    ),
+    /send failed/,
+  )
+  assert.equal(f.deleted(), 0)
+  f.message.deletable = false
+  await f.handle()
+  assert.equal(f.deleted(), 0)
+  assert.match(f.replies.at(-1)?.content ?? '', /管理訊息/)
+  f.message.deletable = true
+  const denied = {
+    ...f.message,
+    delete: async () => {
+      throw new Error('delete failed')
+    },
+  }
+  await handleTowerMessage(
+    { ...denied, fetch: async () => denied } as never,
+    f.client,
+  )
+  assert.equal(f.deleted(), 0)
+  assert.match(f.replies.at(-1)?.content ?? '', /無法刪除原圖/)
+  assert.equal((await towerStore.list(await f.binding())).length, 1)
+})
+
+test('does not discard non-image files or attachments added during analysis', async () => {
+  const f = await fixture()
+  f.message.attachments.set('file', {
+    ...f.attachment('file'),
+    name: 'notes.txt',
+    contentType: 'text/plain',
+  })
+  await f.handle()
+  assert.equal(f.deleted(), 0)
+  assert.match(f.replies[0].content, /圖片以外/)
+  f.message.attachments.delete('file')
+  await handleTowerMessage(
+    {
+      ...f.message,
+      fetch: async () => ({
+        ...f.message,
+        attachments: new Collection([['new', f.attachment('new')]]),
+      }),
+    } as never,
+    f.client,
+  )
+  assert.equal(f.deleted(), 0)
+  assert.match(f.replies.at(-1)?.content ?? '', /附件已變更/)
+})
+
+test('uses each uploader’s cached Discord locale and Japanese for first-time users', async () => {
+  for (const [locale, expected] of [
+    [null, 'バフタワー'],
+    ['ja', 'バフタワー'],
+    ['zh-TW', '增益塔'],
+    ['en-US', 'Buff towers'],
+    ['ko', '버프 타워'],
+  ] as const) {
+    const f = await fixture(true, locale)
+    await f.handle()
+    assert.ok(f.replies[0].content.startsWith(expected))
+    assert.ok(f.replies[0].content.includes('UTC+9'))
+    assert.equal(f.deleted(), 1)
+  }
+  const failed = await fixture(true, 'en-GB')
+  failed.respond({ kind: 'unreadable' })
+  await failed.handle()
+  assert.match(failed.replies[0].content, /Could not parse/)
+  assert.equal(towerLanguage('zh-CN'), 'zt')
+  assert.equal(towerLanguage('fr'), 'ja')
+})
+
+test('remembers Discord locale from interactions and ignores older locale events', async () => {
+  const handlers = new Map<string, (event: unknown) => Promise<void>>()
+  startTowerFeature({
+    on: (name: string, handler: (event: unknown) => Promise<void>) =>
+      handlers.set(name, handler),
+  } as never)
+  const onInteraction = handlers.get('interactionCreate')
+  assert.ok(onInteraction)
+  await onInteraction({
+    user: { id: 'locale-user' },
+    locale: 'ja',
+    createdTimestamp: 100,
+  })
+  await onInteraction({
+    user: { id: 'locale-user' },
+    locale: 'en-US',
+    createdTimestamp: 200,
+  })
+  await onInteraction({
+    user: { id: 'locale-user' },
+    locale: 'ko',
+    createdTimestamp: 150,
+  })
+  assert.equal(await towerStore.getLocale('locale-user'), 'en-US')
+  assert.equal(await towerStore.getLocale('unknown-user'), null)
 })
 
 test('vision client sends image content, uses the optional model, and validates JSON responses', async () => {

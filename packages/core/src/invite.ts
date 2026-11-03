@@ -15,6 +15,7 @@ export const DEFAULT_BOT_PERMISSIONS = [
   PermissionFlagsBits.ManageEvents,
   PermissionFlagsBits.Connect,
   PermissionFlagsBits.ManageWebhooks,
+  PermissionFlagsBits.ManageMessages,
 ]
 
 /**

@@ -1,4 +1,6 @@
 import { escapeMarkdown } from 'discord.js'
+import type { TranslationLanguage } from '../translation/languages.js'
+import { towerText } from './i18n.js'
 
 export const towerAreas = [7, 8, 9, 12, 14, 17, 18, 19] as const
 export type TowerArea = (typeof towerAreas)[number]
@@ -113,6 +115,7 @@ export function formatJapaneseTime(timestamp: number): string {
 export function renderTowerSummary(
   serverNumber: number,
   observations: readonly TowerObservation[],
+  language: TranslationLanguage = 'ja',
 ): string {
   const byArea = new Map(
     observations
@@ -120,12 +123,13 @@ export function renderTowerSummary(
       .map((item) => [item.area, item]),
   )
   return [
-    '增益塔｜日本時間 (UTC+9)｜預估可佔領時間',
+    towerText(language, 'title'),
     ...towerAreas.map((area) => {
       const item = byArea.get(area)
-      if (!item) return `- ${serverNumber}-${area} （留空）`
+      if (!item)
+        return `- ${serverNumber}-${area} ${towerText(language, 'empty')}`
       return `- ${serverNumber}-${area} ${escapeMarkdown(item.occupyingTribe)} ${formatJapaneseTime(item.availableAt)}（<t:${Math.floor(item.availableAt / 1000)}:R>）`
     }),
-    '以圖片上傳時間＋護盾倒數估算；部落為最近截圖回報，倒數結束不代表已更換佔領者。',
+    towerText(language, 'estimate'),
   ].join('\n')
 }

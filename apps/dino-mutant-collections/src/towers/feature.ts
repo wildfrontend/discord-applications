@@ -1,9 +1,19 @@
 import { type Client, Events, type Message } from 'discord.js'
 import { type TowerImageClient, towerImageClient } from './ai-client.js'
+import { type TowerTextKey, towerLanguage, towerText } from './i18n.js'
 import { observeTower, renderTowerSummary } from './service.js'
 import { towerStore } from './store.js'
 
 const maxImageBytes = 20 * 1024 * 1024
+
+function isUnknownMessage(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 10008
+  )
+}
 
 export async function handleTowerMessage(
   message: Message,
@@ -22,6 +32,11 @@ export async function handleTowerMessage(
       : /\.(?:png|jpe?g|webp|gif|heic|avif)$/i.test(attachment.name),
   )
   if (images.size === 0) return
+  const language = towerLanguage(await towerStore.getLocale(message.author.id))
+  const text = (
+    key: TowerTextKey,
+    values: Record<string, string | number> = {},
+  ) => towerText(language, key, values)
 
   let updated = false
   let unreadable = 0
@@ -51,8 +66,7 @@ export async function handleTowerMessage(
     }
     try {
       const result = await imageClient.recognize(image.url)
-      if (result.kind === 'unrelated') continue
-      if (result.kind === 'unreadable') {
+      if (result.kind !== 'tower') {
         unreadable++
         continue
       }
@@ -60,16 +74,16 @@ export async function handleTowerMessage(
         wrongServer++
         continue
       }
-      const saved = await towerStore.save(
-        binding,
-        observeTower(
-          result.reading,
-          message.createdTimestamp,
-          message.id,
-          image.id,
-        ),
-      )
-      updated = saved || updated
+      updated =
+        (await towerStore.save(
+          binding,
+          observeTower(
+            result.reading,
+            message.createdTimestamp,
+            message.id,
+            image.id,
+          ),
+        )) || updated
     } catch {
       failed++
       console.warn(
@@ -85,34 +99,87 @@ export async function handleTowerMessage(
     return
   const notices = [
     wrongServer > 0
-      ? `已忽略 ${wrongServer} 張其他伺服器圖片；此頻道只記錄 ${binding.serverNumber} 服。`
+      ? text('wrongServer', {
+          count: wrongServer,
+          server: binding.serverNumber,
+        })
       : '',
-    unreadable > 0
-      ? `${unreadable} 張圖片欄位不完整，未記錄；請上傳含右下角地圖、佔領部落與護盾倒數的清晰截圖。`
-      : '',
-    unsupported > 0
-      ? `${unsupported} 張圖片格式或大小不支援；請使用 20 MB 以內的 PNG、JPEG 或 WebP。`
-      : '',
-    failed > 0
-      ? `${failed} 張圖片辨識失敗，未記錄；請稍後重新上傳，或請管理員檢查 AI 設定與額度。`
-      : '',
+    unreadable > 0 ? text('unreadable', { count: unreadable }) : '',
+    unsupported > 0 ? text('unsupported', { count: unsupported }) : '',
+    failed > 0 ? text('failed', { count: failed }) : '',
   ].filter(Boolean)
-  const content = [
-    updated
-      ? renderTowerSummary(binding.serverNumber, await towerStore.list(binding))
-      : '',
-    ...notices,
-  ]
-    .filter(Boolean)
-    .join('\n\n')
-  if (content)
-    await message.reply({
-      content,
-      allowedMentions: { parse: [], repliedUser: false },
+  const content =
+    [
+      updated
+        ? renderTowerSummary(
+            binding.serverNumber,
+            await towerStore.list(binding),
+            language,
+          )
+        : '',
+      ...notices,
+    ]
+      .filter(Boolean)
+      .join('\n\n') || text('noUpdate')
+
+  // Send plain text without replying to or embedding the image message.
+  // If posting the result fails, retain the source so the upload is not lost silently.
+  const resultMessage = await message.channel.send({
+    content,
+    allowedMentions: { parse: [], repliedUser: false },
+  })
+
+  let cleanupNotice: TowerTextKey | undefined
+  try {
+    if (images.size !== message.attachments.size) {
+      cleanupNotice = 'sourceHasFiles'
+    } else {
+      // Don't delete new attachments added while recognition was running.
+      const current = await message.fetch(true)
+      if (
+        current.attachments.size !== images.size ||
+        !current.attachments.every((attachment) => images.has(attachment.id))
+      ) {
+        cleanupNotice = 'sourceChanged'
+      } else if (!current.deletable) {
+        cleanupNotice = 'cleanupMissing'
+      } else if (
+        (await towerStore.getBinding(message.guildId, message.channelId))
+          ?.id === binding.id
+      ) {
+        // The analysis-only channel discards failed and successful image posts, including captions.
+        await current.delete()
+      }
+    }
+  } catch (error) {
+    if (!isUnknownMessage(error)) {
+      cleanupNotice = 'cleanupFailed'
+      console.warn(
+        `[towers] Unable to delete source message in channel ${message.channelId}`,
+      )
+    }
+  }
+  if (cleanupNotice) {
+    await resultMessage.edit({
+      content: `${content}\n\n${text(cleanupNotice)}`,
+      allowedMentions: { parse: [] },
     })
+  }
 }
 
 export function startTowerFeature(client: Client): void {
+  client.on(Events.InteractionCreate, async (interaction) => {
+    // MessageCreate has no locale. Remember Discord's locale from real interactions.
+    await towerStore
+      .rememberLocale(
+        interaction.user.id,
+        interaction.locale,
+        interaction.createdTimestamp,
+      )
+      .catch(() => {
+        console.warn('[towers] Unable to remember user locale')
+      })
+  })
   const queues = new Map<string, Promise<void>>()
   client.on(Events.MessageCreate, (message) => {
     if (

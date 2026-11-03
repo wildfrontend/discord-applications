@@ -5,25 +5,53 @@ import {
   PermissionFlagsBits,
   SlashCommandBuilder,
 } from 'discord.js'
+import { type TowerTextKey, towerLanguage, towerText } from '../towers/i18n.js'
 import { renderTowerSummary } from '../towers/service.js'
 import { towerStore } from '../towers/store.js'
 
 export default defineCommand({
   data: new SlashCommandBuilder()
     .setName('tower')
-    .setNameLocalizations({ 'zh-TW': '增益塔' })
-    .setDescription('辨識增益塔截圖，追蹤佔領部落與可佔領時間')
+    .setNameLocalizations({
+      'zh-TW': '增益塔',
+      ja: 'バフタワー',
+      ko: '버프타워',
+    })
+    .setDescription(
+      'Track tower screenshots, occupying tribes, and capture times',
+    )
+    .setDescriptionLocalizations({
+      'zh-TW': '辨識增益塔截圖，追蹤佔領部落與可佔領時間',
+      ja: 'バフタワーの画像から占領部族と占領可能時刻を記録',
+      ko: '타워 이미지에서 점령 부족과 점령 가능 시각을 기록합니다',
+    })
     .setDMPermission(false)
     .addSubcommand((subcommand) =>
       subcommand
         .setName('setup')
-        .setNameLocalizations({ 'zh-TW': '設定' })
-        .setDescription('將頻道綁定到指定遊戲伺服器（需要管理頻道權限）')
+        .setNameLocalizations({ 'zh-TW': '設定', ja: '設定', ko: '설정' })
+        .setDescription(
+          'Bind a channel to a game server (requires Manage Channels)',
+        )
+        .setDescriptionLocalizations({
+          'zh-TW': '將頻道綁定到指定遊戲伺服器（需要管理頻道權限）',
+          ja: 'ゲームサーバーを設定（チャンネルの管理権限が必要）',
+          ko: '게임 서버를 설정합니다 (채널 관리 권한 필요)',
+        })
         .addIntegerOption((option) =>
           option
             .setName('server')
-            .setNameLocalizations({ 'zh-TW': '伺服器' })
-            .setDescription('遊戲伺服器編號，例如 27')
+            .setNameLocalizations({
+              'zh-TW': '伺服器',
+              ja: 'サーバー',
+              ko: '서버',
+            })
+            .setDescription('Game server number, e.g. 27')
+            .setDescriptionLocalizations({
+              'zh-TW': '遊戲伺服器編號，例如 27',
+              ja: 'ゲームサーバー番号（例：27）',
+              ko: '게임 서버 번호 (예: 27)',
+            })
             .setRequired(true)
             .setMinValue(1)
             .setMaxValue(999999),
@@ -31,29 +59,57 @@ export default defineCommand({
         .addChannelOption((option) =>
           option
             .setName('channel')
-            .setNameLocalizations({ 'zh-TW': '頻道' })
-            .setDescription('接收截圖的文字頻道；留空使用目前頻道')
+            .setNameLocalizations({
+              'zh-TW': '頻道',
+              ja: 'チャンネル',
+              ko: '채널',
+            })
+            .setDescription(
+              'Screenshot channel; defaults to the current channel',
+            )
+            .setDescriptionLocalizations({
+              'zh-TW': '接收截圖的文字頻道；留空使用目前頻道',
+              ja: '画像投稿用チャンネル（省略時は現在のチャンネル）',
+              ko: '이미지 채널 (생략하면 현재 채널)',
+            })
             .addChannelTypes(ChannelType.GuildText),
         ),
     )
     .addSubcommand((subcommand) =>
       subcommand
         .setName('list')
-        .setNameLocalizations({ 'zh-TW': '列表' })
-        .setDescription('查看目前頻道的八座增益塔與日本時間'),
+        .setNameLocalizations({ 'zh-TW': '列表', ja: '一覧', ko: '목록' })
+        .setDescription('List this channel’s eight towers in Japan time')
+        .setDescriptionLocalizations({
+          'zh-TW': '查看目前頻道的八座增益塔與日本時間',
+          ja: 'このチャンネルの8塔と日本時間を表示',
+          ko: '현재 채널의 8개 타워를 일본 시간으로 표시합니다',
+        }),
     )
     .addSubcommand((subcommand) =>
       subcommand
         .setName('disable')
-        .setNameLocalizations({ 'zh-TW': '停用' })
-        .setDescription('停止目前頻道的圖片偵測並清除紀錄（需要管理頻道權限）'),
+        .setNameLocalizations({ 'zh-TW': '停用', ja: '停止', ko: '중지' })
+        .setDescription(
+          'Stop tracking and clear records (requires Manage Channels)',
+        )
+        .setDescriptionLocalizations({
+          'zh-TW': '停止目前頻道的圖片偵測並清除紀錄（需要管理頻道權限）',
+          ja: '追跡を停止して記録を消去（チャンネルの管理権限が必要）',
+          ko: '추적을 중지하고 기록을 지웁니다 (채널 관리 권한 필요)',
+        }),
     )
     .toJSON(),
 
   async execute(interaction) {
+    const language = towerLanguage(interaction.locale)
+    const text = (
+      key: TowerTextKey,
+      values: Record<string, string | number> = {},
+    ) => towerText(language, key, values)
     if (!interaction.inCachedGuild()) {
       await interaction.reply({
-        content: '請在伺服器文字頻道使用此指令。',
+        content: text('guildOnly'),
         flags: MessageFlags.Ephemeral,
       })
       return
@@ -67,7 +123,7 @@ export default defineCommand({
     const channel = await interaction.guild.channels.fetch(channelId)
     if (channel?.type !== ChannelType.GuildText) {
       await interaction.reply({
-        content: '請選擇一般文字頻道。',
+        content: text('textChannelOnly'),
         flags: MessageFlags.Ephemeral,
       })
       return
@@ -79,7 +135,7 @@ export default defineCommand({
         ?.has(PermissionFlagsBits.ManageChannels)
     ) {
       await interaction.reply({
-        content: '需要該頻道的「管理頻道」權限才能設定增益塔追蹤。',
+        content: text('manageChannels'),
         flags: MessageFlags.Ephemeral,
       })
       return
@@ -97,8 +153,7 @@ export default defineCommand({
           ]))
     ) {
       await interaction.reply({
-        content:
-          'Bot 需要該頻道的「檢視頻道」、「傳送訊息」與「讀取訊息歷史」權限。',
+        content: text('botPermissions'),
         flags: MessageFlags.Ephemeral,
       })
       return
@@ -116,19 +171,28 @@ export default defineCommand({
       )
       const warning =
         process.env.TOWER_TRACKING_ENABLED !== 'true'
-          ? '\n尚未啟用圖片偵測：請設定 TOWER_TRACKING_ENABLED=true，啟用 Discord Message Content Intent 並重啟 Bot。'
+          ? text('trackingDisabled')
           : !process.env.AI_API_KEY?.trim()
-            ? '\n尚未設定 AI_API_KEY；設定後重啟 Bot 才能辨識圖片。'
+            ? text('aiMissing')
             : ''
       await interaction.editReply({
-        content: `已設定 <#${channel.id}> 只記錄 ${serverNumber} 服的 7、8、9、12、14、17、18、19 區。\n請上傳增益塔截圖；可佔領時間以圖片上傳時間＋護盾倒數計算，顯示日本時間 (UTC+9)。切換伺服器會清除原有紀錄。${warning}`,
+        content: [
+          text('setup', { channel: channel.id, server: serverNumber }),
+          warning,
+          me &&
+          channel.permissionsFor(me)?.has(PermissionFlagsBits.ManageMessages)
+            ? ''
+            : text('cleanupMissing'),
+        ]
+          .filter(Boolean)
+          .join('\n'),
         allowedMentions: { parse: [] },
       })
       return
     }
     if (action === 'disable') {
       await towerStore.disable(interaction.guildId, channel.id)
-      await interaction.editReply('已停止此頻道的增益塔圖片偵測並清除紀錄。')
+      await interaction.editReply(text('disabled'))
       return
     }
     const binding = await towerStore.getBinding(interaction.guildId, channel.id)
@@ -137,8 +201,9 @@ export default defineCommand({
         ? renderTowerSummary(
             binding.serverNumber,
             await towerStore.list(binding),
+            language,
           )
-        : '此頻道尚未設定增益塔追蹤，請管理員使用 /tower setup server:27。',
+        : text('notConfigured'),
       allowedMentions: { parse: [] },
     })
   },

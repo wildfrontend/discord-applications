@@ -13,6 +13,11 @@ const database = createDatabase('towers.sqlite')
 await configureDatabase(database)
 await database.batch(
   [
+    `CREATE TABLE IF NOT EXISTS tower_user_locales (
+      user_id TEXT PRIMARY KEY,
+      locale TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS tower_channels (
     channel_id TEXT PRIMARY KEY,
     guild_id TEXT NOT NULL,
@@ -38,6 +43,26 @@ await database.batch(
 )
 
 export const towerStore = {
+  async rememberLocale(
+    userId: string,
+    locale: string,
+    observedAt = Date.now(),
+  ): Promise<void> {
+    await database.execute({
+      sql: `INSERT INTO tower_user_locales (user_id, locale, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET locale = excluded.locale, updated_at = excluded.updated_at
+        WHERE excluded.updated_at >= tower_user_locales.updated_at`,
+      args: [userId, locale, observedAt],
+    })
+  },
+
+  async getLocale(userId: string): Promise<string | null> {
+    const result = await database.execute({
+      sql: 'SELECT locale FROM tower_user_locales WHERE user_id = ?',
+      args: [userId],
+    })
+    return result.rows[0] ? String(result.rows[0].locale) : null
+  },
   async getBinding(
     guildId: string,
     channelId: string,
