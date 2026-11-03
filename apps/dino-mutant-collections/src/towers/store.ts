@@ -40,6 +40,7 @@ await database.batch(
     time_basis TEXT NOT NULL DEFAULT 'upload',
     clock_time TEXT,
     clock_is_utc INTEGER,
+    time_uncertain INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (binding_id, area)
   )`,
   ],
@@ -54,6 +55,7 @@ for (const [name, definition] of [
   ['time_basis', "TEXT NOT NULL DEFAULT 'upload'"],
   ['clock_time', 'TEXT'],
   ['clock_is_utc', 'INTEGER'],
+  ['time_uncertain', 'INTEGER NOT NULL DEFAULT 0'],
 ] as const) {
   if (!observationColumns.rows.some((row) => row.name === name)) {
     await database.execute(
@@ -63,6 +65,9 @@ for (const [name, definition] of [
 }
 await database.execute(
   'UPDATE tower_observations SET uploaded_at = observed_at WHERE uploaded_at = 0',
+)
+await database.execute(
+  "UPDATE tower_observations SET time_uncertain = 1 WHERE time_basis = 'minute-estimate'",
 )
 
 export const towerStore = {
@@ -154,15 +159,16 @@ export const towerStore = {
     const result = await database.execute({
       sql: `INSERT INTO tower_observations (binding_id, area, server_number, occupying_tribe,
           remaining_seconds, observed_at, available_at, source_message_id, source_attachment_id,
-          uploaded_at, time_basis, clock_time, clock_is_utc)
-        SELECT binding_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM tower_channels
+          uploaded_at, time_basis, clock_time, clock_is_utc, time_uncertain)
+        SELECT binding_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM tower_channels
         WHERE binding_id = ? AND guild_id = ? AND channel_id = ? AND server_number = ?
         ON CONFLICT(binding_id, area) DO UPDATE SET
           occupying_tribe = excluded.occupying_tribe, remaining_seconds = excluded.remaining_seconds,
           observed_at = excluded.observed_at, available_at = excluded.available_at,
           source_message_id = excluded.source_message_id, source_attachment_id = excluded.source_attachment_id,
           uploaded_at = excluded.uploaded_at, time_basis = excluded.time_basis,
-          clock_time = excluded.clock_time, clock_is_utc = excluded.clock_is_utc
+          clock_time = excluded.clock_time, clock_is_utc = excluded.clock_is_utc,
+          time_uncertain = excluded.time_uncertain
         WHERE (excluded.observed_at / 60000) > (tower_observations.observed_at / 60000) OR
           ((excluded.observed_at / 60000) = (tower_observations.observed_at / 60000) AND
             (excluded.uploaded_at > tower_observations.uploaded_at OR
@@ -180,6 +186,7 @@ export const towerStore = {
         item.timeBasis,
         item.clock?.time ?? null,
         item.clock ? (item.clock.isUtc ? 1 : 0) : null,
+        item.timeUncertain ? 1 : 0,
         binding.id,
         binding.guildId,
         binding.channelId,
@@ -202,6 +209,7 @@ export const towerStore = {
       observedAt: Number(row.observed_at),
       uploadedAt: Number(row.uploaded_at),
       timeBasis: String(row.time_basis) as TowerTimeBasis,
+      timeUncertain: Number(row.time_uncertain) === 1,
       availableAt: Number(row.available_at),
       sourceMessageId: String(row.source_message_id),
       sourceAttachmentId: String(row.source_attachment_id),

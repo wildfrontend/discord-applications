@@ -153,6 +153,7 @@ test('uses a labelled UTC clock to compensate upload delay and handle UTC midnig
   assert.deepEqual(resolveTowerTime({ time: '07:11', isUtc: true }, upload), {
     observedAt: Date.parse('2026-11-03T07:11:00Z'),
     timeBasis: 'utc-clock',
+    timeUncertain: false,
   })
   assert.deepEqual(
     resolveTowerTime(
@@ -162,6 +163,7 @@ test('uses a labelled UTC clock to compensate upload delay and handle UTC midnig
     {
       observedAt: Date.parse('2026-11-03T23:58:00Z'),
       timeBasis: 'utc-clock',
+      timeUncertain: false,
     },
   )
   const result = recognized()
@@ -182,6 +184,7 @@ test('estimates recent local-clock minute delays across whole, half-hour and qua
     assert.deepEqual(resolveTowerTime({ time, isUtc: false }, upload), {
       observedAt: Date.parse('2026-11-03T07:11:00Z'),
       timeBasis: 'minute-estimate',
+      timeUncertain: true,
     })
   }
   assert.deepEqual(
@@ -192,24 +195,54 @@ test('estimates recent local-clock minute delays across whole, half-hour and qua
     {
       observedAt: Date.parse('2026-11-03T23:58:00Z'),
       timeBasis: 'minute-estimate',
+      timeUncertain: true,
     },
   )
 })
 
-test('falls back to upload time for missing clocks, stale/future UTC readings, or excessive minute lag', () => {
+test('falls back to upload time for missing clocks and flags future UTC clocks without dating them yesterday', () => {
   const upload = Date.parse('2026-11-03T07:16:42Z')
-  for (const clock of [
-    undefined,
-    { time: 'bad', isUtc: true },
-    { time: '06:40', isUtc: true },
-    { time: '07:20', isUtc: true },
-    { time: '15:05', isUtc: false },
-  ]) {
+  for (const clock of [undefined, { time: 'bad', isUtc: true }]) {
     assert.deepEqual(resolveTowerTime(clock, upload), {
       observedAt: upload,
       timeBasis: 'upload',
+      timeUncertain: false,
     })
   }
+  assert.deepEqual(resolveTowerTime({ time: '07:20', isUtc: true }, upload), {
+    observedAt: upload,
+    timeBasis: 'upload',
+    timeUncertain: true,
+  })
+  assert.deepEqual(
+    resolveTowerTime(
+      { time: '00:03', isUtc: true },
+      Date.parse('2026-11-03T23:59:00Z'),
+    ),
+    {
+      observedAt: Date.parse('2026-11-03T23:59:00Z'),
+      timeBasis: 'upload',
+      timeUncertain: true,
+    },
+  )
+})
+
+test('uses UTC reference time beyond 30 minutes and flags it instead of reverting to upload time', () => {
+  const clock = { time: '07:11', isUtc: true }
+  assert.equal(
+    resolveTowerTime(clock, Date.parse('2026-11-03T07:41:00Z')).timeUncertain,
+    false,
+  )
+  const older = resolveTowerTime(clock, Date.parse('2026-11-03T07:41:01Z'))
+  assert.equal(older.observedAt, Date.parse('2026-11-03T07:11:00Z'))
+  assert.equal(older.timeBasis, 'utc-clock')
+  assert.equal(older.timeUncertain, true)
+  const midnight = resolveTowerTime(
+    { time: '23:00', isUtc: true },
+    Date.parse('2026-11-04T00:02:00Z'),
+  )
+  assert.equal(midnight.observedAt, Date.parse('2026-11-03T23:00:00Z'))
+  assert.equal(midnight.timeUncertain, true)
 })
 
 test('rejects incomplete and unrelated images instead of guessing data', () => {
@@ -476,8 +509,35 @@ test('processing preserves clock metadata and exposes the estimate basis in loca
   assert.equal(item.observedAt, Date.parse('2026-11-03T07:11:00Z'))
   assert.deepEqual(item.clock, { time: '12:56', isUtc: false })
   assert.match(f.replies[0].content, /分鐘推估/)
-  assert.match(f.replies[0].content, /10 分鐘/)
+  assert.match(f.replies[0].content, /可能有誤差/)
+  assert.match(f.replies[0].content, /30 分鐘/)
+  assert.equal(item.timeUncertain, true)
   assert.equal(f.deleted(), 1)
+})
+
+test('a delayed but readable screenshot still updates records with a persisted localized uncertainty marker', async () => {
+  const f = await fixture()
+  const result = recognized()
+  assert.equal(result.kind, 'tower')
+  f.message.createdTimestamp = Date.parse('2026-11-03T08:00:00Z')
+  f.respond({
+    ...result,
+    reading: { ...result.reading, clock: { time: '07:11', isUtc: true } },
+  })
+  await f.handle()
+  const [item] = await towerStore.list(await f.binding())
+  assert.equal(item.observedAt, Date.parse('2026-11-03T07:11:00Z'))
+  assert.equal(item.availableAt, item.observedAt + item.remainingSeconds * 1000)
+  assert.equal(item.timeUncertain, true)
+  assert.match(f.replies[0].content, /截圖超過 30 分鐘，可能有誤差/)
+  assert.equal(f.deleted(), 1)
+  for (const [language, marker] of [
+    ['ja', '誤差'],
+    ['en', 'inaccurate'],
+    ['ko', '오차'],
+  ] as const) {
+    assert.ok(renderTowerSummary(27, [item], language).includes(marker))
+  }
 })
 
 test('newer uploads replace the owner; duplicates and older completed work cannot overwrite them', async () => {

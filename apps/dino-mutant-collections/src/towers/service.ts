@@ -5,8 +5,7 @@ import { towerText } from './i18n.js'
 export const towerAreas = [7, 8, 9, 12, 14, 17, 18, 19] as const
 export type TowerArea = (typeof towerAreas)[number]
 export const maximumShieldSeconds = 48 * 60 * 60
-export const maximumUtcClockAgeMs = 30 * 60 * 1000
-export const maximumMinuteEstimateAgeMs = 10 * 60 * 1000
+export const clockDelayWarningMs = 30 * 60 * 1000
 
 export type TowerTimeBasis = 'upload' | 'utc-clock' | 'minute-estimate'
 
@@ -27,6 +26,7 @@ export interface TowerObservation extends TowerReading {
   observedAt: number
   uploadedAt: number
   timeBasis: TowerTimeBasis
+  timeUncertain: boolean
   availableAt: number
   sourceMessageId: string
   sourceAttachmentId: string
@@ -59,8 +59,12 @@ function clockMinutes(value: unknown): number | null {
 export function resolveTowerTime(
   clock: TowerClock | undefined,
   uploadedAt: number,
-): { observedAt: number; timeBasis: TowerTimeBasis } {
-  const fallback = { observedAt: uploadedAt, timeBasis: 'upload' as const }
+): { observedAt: number; timeBasis: TowerTimeBasis; timeUncertain: boolean } {
+  const fallback = {
+    observedAt: uploadedAt,
+    timeBasis: 'upload' as const,
+    timeUncertain: false,
+  }
   const minutes = clockMinutes(clock?.time)
   if (!clock || minutes === null) return fallback
   const minuteMs = 60_000
@@ -68,19 +72,29 @@ export function resolveTowerTime(
   if (clock.isUtc) {
     const dayMs = 24 * 60 * minuteMs
     let candidate = Math.floor(uploadedAt / dayMs) * dayMs + minutes * minuteMs
-    if (candidate > uploadedAt) candidate -= dayMs
-    return uploadedAt - candidate <= maximumUtcClockAgeMs
-      ? { observedAt: candidate, timeBasis: 'utc-clock' }
-      : fallback
+    // With no date in the image, choose the nearest UTC day. A future clock
+    // must not silently become a nearly 24-hour-old screenshot.
+    if (candidate - uploadedAt > dayMs / 2) candidate -= dayMs
+    else if (uploadedAt - candidate > dayMs / 2) candidate += dayMs
+    if (candidate > uploadedAt) return { ...fallback, timeUncertain: true }
+    return {
+      observedAt: candidate,
+      timeBasis: 'utc-clock',
+      timeUncertain: uploadedAt - candidate > clockDelayWarningMs,
+    }
   }
   // Civil offsets can include 30/45 minutes. Without a zone, only the phase
   // within a 15-minute interval is usable; it cannot distinguish older photos.
   const uploadedMinutes = Math.floor(uploadMinute / minuteMs)
   const lagMinutes = (((uploadedMinutes - minutes) % 15) + 15) % 15
   const candidate = uploadMinute - lagMinutes * minuteMs
-  return uploadedAt - candidate <= maximumMinuteEstimateAgeMs
-    ? { observedAt: candidate, timeBasis: 'minute-estimate' }
-    : fallback
+  // The actual delay can differ by 15-minute increments, so a 30-minute
+  // freshness claim is impossible without a timezone. Keep the estimate flagged.
+  return {
+    observedAt: candidate,
+    timeBasis: 'minute-estimate',
+    timeUncertain: true,
+  }
 }
 
 // Validate model output independently of JSON mode; never infer missing fields.
@@ -185,7 +199,10 @@ export function renderTowerSummary(
           : item.timeBasis === 'minute-estimate'
             ? 'timingMinute'
             : 'timingUpload'
-      return `- ${serverNumber}-${area} ${escapeMarkdown(item.occupyingTribe)} ${formatJapaneseTime(item.availableAt)}（<t:${Math.floor(item.availableAt / 1000)}:R>｜${towerText(language, basis)}）`
+      const warning = item.timeUncertain
+        ? `｜${towerText(language, item.timeBasis === 'utc-clock' && item.uploadedAt - item.observedAt > clockDelayWarningMs ? 'timeOld' : 'timeUncertain')}`
+        : ''
+      return `- ${serverNumber}-${area} ${escapeMarkdown(item.occupyingTribe)} ${formatJapaneseTime(item.availableAt)}（<t:${Math.floor(item.availableAt / 1000)}:R>｜${towerText(language, basis)}${warning}）`
     }),
     towerText(language, 'estimate'),
     [...byArea.values()].some((item) => item.timeBasis === 'minute-estimate')

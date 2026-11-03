@@ -4,10 +4,12 @@ const japanese = {
   title: 'バフタワー｜日本時間 (UTC+9)｜占領可能時刻の目安',
   empty: '（未報告）',
   timingUtc: 'UTC時計で校正',
+  timeUncertain: '時刻に誤差の可能性あり',
+  timeOld: '撮影から30分超・時刻に誤差の可能性あり',
   timingMinute: '画像の分から推定',
   timingUpload: '投稿時刻基準',
   minuteNotice:
-    '分からの推定は撮影後10分以内の投稿が前提です。時区表示のない古い画像は判別できないため、ゲーム時計のUTC表示を推奨します。',
+    '時区表示がないため、30分以内の画像か確認できません。分から推定した時刻には誤差が生じる可能性があります。',
   estimate:
     '画像の時刻を優先し、不明な場合は投稿時刻から推定。部族は最後の報告時点の情報です。',
   unreadable:
@@ -50,10 +52,12 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     title: '增益塔｜日本時間 (UTC+9)｜預估可佔領時間',
     empty: '（留空）',
     timingUtc: 'UTC 校準',
+    timeUncertain: '可能有誤差',
+    timeOld: '截圖超過 30 分鐘，可能有誤差',
     timingMinute: '分鐘推估',
     timingUpload: '上傳時間基準',
     minuteNotice:
-      '分鐘推估以截圖後 10 分鐘內上傳為前提；沒有時區標示的舊圖無法可靠辨識，建議將遊戲時間切成 UTC。',
+      '未標時區，無法確認截圖是否在 30 分鐘內；已依分鐘推估，時間可能有誤差。',
     estimate:
       '優先以圖片時間校準，無法判斷時沿用上傳時間；部落為最近截圖回報。',
     unreadable: '{count} 張圖片無法解析，原有紀錄保持不變。',
@@ -85,10 +89,12 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     title: 'Buff towers | Japan time (UTC+9) | Estimated capture time',
     empty: '(Not reported)',
     timingUtc: 'UTC clock',
+    timeUncertain: 'Time may be inaccurate',
+    timeOld: 'Over 30 minutes old; time may be inaccurate',
     timingMinute: 'Minute estimate',
     timingUpload: 'Upload time',
     minuteNotice:
-      'Minute estimates assume a fresh screenshot uploaded within 10 minutes. Old images without a timezone cannot be reliably dated; UTC game clocks are recommended.',
+      'Without a timezone, we cannot confirm whether the screenshot is within 30 minutes of upload. The minute estimate may be inaccurate.',
     estimate:
       'Uses the image clock when possible, otherwise upload time. Tribes reflect the latest screenshots.',
     unreadable: 'Could not parse {count} image(s). Existing records were kept.',
@@ -127,10 +133,12 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     title: '버프 타워｜일본 시간 (UTC+9)｜예상 점령 가능 시각',
     empty: '（미보고）',
     timingUtc: 'UTC 시각 보정',
+    timeUncertain: '시간에 오차가 있을 수 있음',
+    timeOld: '촬영 후 30분 초과·시간에 오차가 있을 수 있음',
     timingMinute: '분 단위 추정',
     timingUpload: '업로드 시각 기준',
     minuteNotice:
-      '분 단위 추정은 촬영 후 10분 이내 업로드를 전제로 합니다. 시간대 표시가 없는 오래된 이미지는 판별할 수 없으므로 게임 시계를 UTC로 설정해 주세요.',
+      '시간대 표시가 없어 촬영 후 30분 이내인지 확인할 수 없습니다. 분 단위 추정에는 오차가 있을 수 있습니다.',
     estimate:
       '가능하면 이미지 시각을 사용하고, 알 수 없으면 업로드 시각을 사용합니다. 부족은 마지막 스크린샷 기준입니다.',
     unreadable:
