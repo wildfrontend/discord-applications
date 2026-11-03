@@ -25,6 +25,8 @@ const environmentKeys = [
   'AI_PROVIDER_NAME',
   'AI_MIN_REQUEST_INTERVAL_MS',
   'TRANSLATION_AUTO_ENABLED',
+  'TOWER_TRACKING_ENABLED',
+  'TOWER_AI_MODEL',
 ] as const
 
 type EnvironmentKey = (typeof environmentKeys)[number]
@@ -249,19 +251,30 @@ async function main(): Promise<void> {
     '啟用頻道自動翻譯',
     current.get('TRANSLATION_AUTO_ENABLED') === 'true',
   )
+  const towerTracking = await askBoolean(
+    '啟用增益塔截圖自動辨識（需 Message Content Intent）',
+    current.get('TOWER_TRACKING_ENABLED') === 'true',
+  )
   let aiApiKey = await askSecret(
-    'AI API Key（右鍵與自動翻譯需要）',
+    'AI API Key（翻譯與增益塔圖片辨識需要）',
     current.get('AI_API_KEY') ?? '',
     { allowClear: true },
   )
-  while (automaticTranslation && !aiApiKey) {
-    console.log('啟用自動翻譯時必須設定 AI API Key。')
+  while ((automaticTranslation || towerTracking) && !aiApiKey) {
+    console.log('啟用自動翻譯或增益塔辨識時必須設定 AI API Key。')
     aiApiKey = await askSecret('AI API Key')
   }
   const aiModel = await ask(
     'AI 模型',
     current.get('AI_MODEL') || 'qwen/qwen3.8-27b',
   )
+  const towerAiModel = towerTracking
+    ? await ask(
+        '增益塔圖片模型（留空沿用 AI 模型，必須支援圖片）',
+        current.get('TOWER_AI_MODEL') ?? '',
+        { allowClear: true },
+      )
+    : (current.get('TOWER_AI_MODEL') ?? '')
   const aiBaseUrl = await askValidated(
     'OpenAI 相容 API Base URL',
     current.get('AI_BASE_URL') || 'https://api.groq.com/openai/v1',
@@ -329,6 +342,8 @@ async function main(): Promise<void> {
     AI_PROVIDER_NAME: aiProviderName,
     AI_MIN_REQUEST_INTERVAL_MS: aiInterval,
     TRANSLATION_AUTO_ENABLED: String(automaticTranslation),
+    TOWER_TRACKING_ENABLED: String(towerTracking),
+    TOWER_AI_MODEL: towerAiModel || null,
   })
 
   console.log(`\n設定已安全寫入：${environmentFile}`)

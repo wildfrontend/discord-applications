@@ -1,6 +1,6 @@
 # Dino Mutant Collections
 
-A self-hosted Discord bot for recurring scheduled events and multilingual translation. The repository is a pnpm/Turborepo monorepo and also includes a local development panel.
+A self-hosted Discord bot for recurring scheduled events, multilingual translation, and buff tower screenshot tracking. The repository is a pnpm/Turborepo monorepo and also includes a local development panel.
 
 ## Features
 
@@ -10,6 +10,7 @@ A self-hosted Discord bot for recurring scheduled events and multilingual transl
 - Automatic two-way or multi-channel translation groups.
 - Traditional Chinese, English, Japanese, and Korean translation.
 - Localized `/translate` command UI in English, Traditional Chinese, Japanese, and Korean.
+- Per-channel buff tower tracking from screenshots, with occupying tribes and availability in Japan time.
 - SQLite for simple self-hosting or libSQL for remote persistence.
 
 ## Quick start with Docker
@@ -27,7 +28,7 @@ The public container image is `ghcr.io/wildfrontend/dino-mutant-collections:late
 1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and create an application.
 2. Copy its **Application ID** from **General Information**.
 3. Open **Bot**, reset the token, and copy it. Treat the token like a password.
-4. Enable **Message Content Intent** only if you plan to use automatic channel translation.
+4. Enable **Message Content Intent** if you plan to use automatic channel translation or buff tower screenshot tracking.
 
 Every installation should use its own Discord bot token and AI API key. Never commit either secret.
 
@@ -119,6 +120,38 @@ Automatic translation also forwards images and other attachments, preserving fil
 
 If webhook delivery is unavailable, the bot's fallback messages also include the attachments. Grant the bot **Attach Files** permission for this fallback. Discord's upload size limits still apply to forwarded files.
 
+## Buff tower screenshots
+
+1. Set `TOWER_TRACKING_ENABLED=true` in the bot environment (or use the setup wizard), enable **Message Content Intent** in Discord Developer Portal, and restart the bot.
+2. Configure `AI_API_KEY`, `AI_BASE_URL`, and an image-capable `AI_MODEL` supporting JSON mode. Optionally set `TOWER_AI_MODEL` to use a different model for screenshots on the same provider. The example Groq model supports images and JSON mode; see the [provider's vision documentation](https://console.groq.com/docs/vision).
+3. Bind a normal text channel to a game server (requires **Manage Channels** in that channel):
+
+```text
+/tower setup server:27 channel:#buff-towers
+```
+
+Upload PNG, JPEG, or WebP screenshots up to 20 MB in that channel. Screenshots are sent to the configured AI provider. The bot reads the map location at the bottom right, the **occupying tribe** (not the tribe attempting occupation), and **shield remaining time**. Only server 27 and areas **7, 8, 9, 12, 14, 17, 18, 19** are recorded. `027-19` is normalized to `27-19`. Other servers and non-tower images never update the records. Incomplete/failed readings leave existing data intact and ask for a clearer image or retry.
+
+Every successful upload produces one summary of all eight towers, leaving unreported positions blank. `/tower list` shows the current records. Absolute times use **Asia/Tokyo (UTC+9)**, with a Discord relative timestamp beside each time that updates automatically. Availability is estimated as **Discord message upload time + shield countdown**, including hours over 24, up to 48. It does not use the device clock or add another 48 hours. The owner remains the last reported tribe after the countdown ends; new occupation must be reported with another screenshot. Re-uploading an old screenshot uses its new upload time and may overestimate availability.
+
+Screenshots can be submitted repeatedly during the same 48-hour occupation cycle. Every newer successfully read upload replaces that tower's tribe and estimated availability, even when the new estimate is earlier. For example, a 09:00 upload with 48 hours remaining and an upload the next day at 09:00 with 24 hours remaining point to the same availability time. After a new occupation, a fresh screenshot supplies the new countdown. Failed readings and older uploads never replace a newer record; other towers are unaffected. Expiration does not automatically start another 48-hour cycle.
+
+For example, a screenshot uploaded on November 3, 2026 at **17:11:42 Japan time** with `31:48:18` remaining gives:
+
+```text
+增益塔｜日本時間 (UTC+9)｜預估可佔領時間
+- 27-7 （留空）
+- 27-8 （留空）
+- 27-9 （留空）
+- 27-12 （留空）
+- 27-14 （留空）
+- 27-17 （留空）
+- 27-18 （留空）
+- 27-19 [PRIZE] STONE 11/05 01:00
+```
+
+The bot needs **View Channel**, **Send Messages**, and **Read Message History**. All members can use `/tower list`; configuring or disabling tracking requires **Manage Channels**. Omit `channel` in `setup` to use the current channel. Setting the same server preserves records; switching servers clears that channel's old records. `/tower disable` stops tracking and clears the current channel's records. Records persist in SQLite (`towers.sqlite` in the existing data volume) or the configured libSQL database. Images themselves are not stored.
+
 ## Recurring events
 
 Create the first event with Discord's native scheduled-event interface, then configure recurrence:
@@ -173,6 +206,8 @@ The setup wizard is recommended. For manual configuration, copy `apps/dino-mutan
 | `AI_MODEL` | Provider model name. |
 | `AI_BASE_URL` | OpenAI-compatible API base URL. |
 | `TRANSLATION_AUTO_ENABLED` | Enables automatic channel translation. |
+| `TOWER_TRACKING_ENABLED` | Enables screenshot detection in channels configured with `/tower setup`. Requires Message Content Intent. |
+| `TOWER_AI_MODEL` | Optional image-capable model override; otherwise uses `AI_MODEL`. Uses the same API key and base URL. |
 | `DATABASE_DRIVER` | `sqlite` or `libsql`. |
 | `DATABASE_URL` | Required when using libSQL. |
 | `DATABASE_AUTH_TOKEN` | Optional libSQL authentication token. |

@@ -1,3 +1,4 @@
+import { enqueueAiRequest } from '../ai/request-queue.js'
 import type {
   BatchTranslationClient,
   BatchTranslationResult,
@@ -33,10 +34,6 @@ const baseUrl =
 const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`
 const providerName =
   process.env.AI_PROVIDER_NAME?.trim() || inferProviderName(baseUrl)
-const configuredInterval = Number(process.env.AI_MIN_REQUEST_INTERVAL_MS)
-const minimumRequestIntervalMs = Number.isFinite(configuredInterval)
-  ? Math.max(0, configuredInterval)
-  : 2_100
 const configuredMaxOutputTokens = Number(process.env.AI_MAX_OUTPUT_TOKENS)
 const maxOutputTokens = Number.isInteger(configuredMaxOutputTokens)
   ? Math.min(8_192, Math.max(1, configuredMaxOutputTokens))
@@ -49,9 +46,6 @@ Preserve URLs, Discord mentions such as <@123> and <#123>, custom emoji, Markdow
 Use natural native phrasing in the target language while retaining every meaning and detail.
 Language codes are: zt = Traditional Chinese, en = English, ja = Japanese, ko = Korean.
 Follow the supplied JSON schema exactly.`
-
-let requestQueue: Promise<void> = Promise.resolve()
-let nextRequestAt = 0
 
 function inferProviderName(url: string): string {
   if (url.includes('api.groq.com')) return 'groq'
@@ -72,22 +66,6 @@ function apiKey(): string {
   return value
 }
 
-function enqueueRequest<T>(request: () => Promise<T>): Promise<T> {
-  const scheduled = requestQueue.then(async () => {
-    const waitMs = Math.max(0, nextRequestAt - Date.now())
-    if (waitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, waitMs))
-    }
-    nextRequestAt = Date.now() + minimumRequestIntervalMs
-    return request()
-  })
-  requestQueue = scheduled.then(
-    () => undefined,
-    () => undefined,
-  )
-  return scheduled
-}
-
 function quotaDetails(response: Response): string {
   const remaining = response.headers.get('x-ratelimit-remaining-requests')
   const reset = response.headers.get('x-ratelimit-reset-requests')
@@ -100,7 +78,7 @@ async function generateJson<T>(
   schemaName: string,
   schema: object,
 ): Promise<T> {
-  return enqueueRequest(async () => {
+  return enqueueAiRequest(async () => {
     let response: Response
     try {
       response = await fetch(endpoint, {
