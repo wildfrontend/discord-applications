@@ -1,18 +1,41 @@
 import { randomUUID } from 'node:crypto'
 import { configureDatabase, createDatabase } from '../database.js'
 import type { TowerArea, TowerObservation, TowerTimeBasis } from './service.js'
+import { towerReportingPeriodMs } from './service.js'
 
 export interface TowerBinding {
   id: string
   guildId: string
   channelId: string
   serverNumber: number
+  adoptExistingSummary?: boolean
+}
+
+export interface TowerReportingPeriod {
+  id: string
+  bindingId: string
+  startedAt: number
+  endsAt: number
+  messageId: string | null
 }
 
 const database = createDatabase('towers.sqlite')
 await configureDatabase(database)
 await database.batch(
   [
+    `CREATE TABLE IF NOT EXISTS tower_period_observations (
+      period_id TEXT NOT NULL, area INTEGER NOT NULL, observation_json TEXT NOT NULL,
+      observed_at INTEGER NOT NULL, uploaded_at INTEGER NOT NULL, attachment_id TEXT NOT NULL,
+      PRIMARY KEY (period_id, area)
+    )`,
+    `CREATE TABLE IF NOT EXISTS tower_reporting_periods (
+      id TEXT PRIMARY KEY,
+      binding_id TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      ends_at INTEGER NOT NULL,
+      message_id TEXT,
+      UNIQUE (binding_id, started_at)
+    )`,
     `CREATE TABLE IF NOT EXISTS tower_user_locales (
       user_id TEXT PRIMARY KEY,
       locale TEXT NOT NULL,
@@ -24,7 +47,8 @@ await database.batch(
     binding_id TEXT NOT NULL UNIQUE,
     server_number INTEGER NOT NULL CHECK (server_number BETWEEN 1 AND 999999),
     updated_by TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    adopt_existing_summary INTEGER NOT NULL DEFAULT 0
   )`,
     `CREATE TABLE IF NOT EXISTS tower_observations (
     binding_id TEXT NOT NULL,
@@ -46,6 +70,17 @@ await database.batch(
   ],
   'write',
 )
+
+const channelColumns = await database.execute(
+  'PRAGMA table_info(tower_channels)',
+)
+if (!channelColumns.rows.some((row) => row.name === 'adopt_existing_summary')) {
+  // Pre-upgrade channels may adopt their existing board; new/rebound channels
+  // must not repurpose archived summaries from an earlier configuration.
+  await database.execute(
+    'ALTER TABLE tower_channels ADD COLUMN adopt_existing_summary INTEGER NOT NULL DEFAULT 1',
+  )
+}
 
 const observationColumns = await database.execute(
   'PRAGMA table_info(tower_observations)',
@@ -71,6 +106,162 @@ await database.execute(
 )
 
 export const towerStore = {
+  async getReportingPeriodById(
+    binding: TowerBinding,
+    id: string,
+  ): Promise<TowerReportingPeriod | null> {
+    const result = await database.execute({
+      sql: 'SELECT * FROM tower_reporting_periods WHERE id = ? AND binding_id = ?',
+      args: [id, binding.id],
+    })
+    const row = result.rows[0]
+    return row
+      ? {
+          id: String(row.id),
+          bindingId: String(row.binding_id),
+          startedAt: Number(row.started_at),
+          endsAt: Number(row.ends_at),
+          messageId: typeof row.message_id === 'string' ? row.message_id : null,
+        }
+      : null
+  },
+  async listReportingPeriods(
+    binding: TowerBinding,
+  ): Promise<TowerReportingPeriod[]> {
+    const result = await database.execute({
+      sql: 'SELECT * FROM tower_reporting_periods WHERE binding_id = ? ORDER BY started_at DESC LIMIT 2',
+      args: [binding.id],
+    })
+    return result.rows.map((row) => ({
+      id: String(row.id),
+      bindingId: String(row.binding_id),
+      startedAt: Number(row.started_at),
+      endsAt: Number(row.ends_at),
+      messageId: typeof row.message_id === 'string' ? row.message_id : null,
+    }))
+  },
+
+  async listPeriodObservations(
+    binding: TowerBinding,
+    period: TowerReportingPeriod,
+  ): Promise<TowerObservation[]> {
+    const result = await database.execute({
+      sql: `SELECT observation_json FROM tower_period_observations WHERE period_id = ?
+        AND EXISTS (SELECT 1 FROM tower_reporting_periods WHERE id = ? AND binding_id = ?) ORDER BY area`,
+      args: [period.id, period.id, binding.id],
+    })
+    return result.rows.map(
+      (row) => JSON.parse(String(row.observation_json)) as TowerObservation,
+    )
+  },
+
+  async savePeriodObservation(
+    binding: TowerBinding,
+    period: TowerReportingPeriod,
+    item: TowerObservation,
+  ): Promise<void> {
+    await database.execute({
+      sql: `INSERT INTO tower_period_observations (period_id, area, observation_json, observed_at, uploaded_at, attachment_id)
+        SELECT id, ?, ?, ?, ?, ? FROM tower_reporting_periods WHERE id = ? AND binding_id = ?
+        AND EXISTS (SELECT 1 FROM tower_channels WHERE binding_id = ? AND guild_id = ? AND channel_id = ?)
+        ON CONFLICT(period_id, area) DO UPDATE SET observation_json = excluded.observation_json,
+          observed_at = excluded.observed_at, uploaded_at = excluded.uploaded_at, attachment_id = excluded.attachment_id
+        WHERE (excluded.observed_at / 60000) > (tower_period_observations.observed_at / 60000) OR
+          ((excluded.observed_at / 60000) = (tower_period_observations.observed_at / 60000) AND
+            (excluded.uploaded_at > tower_period_observations.uploaded_at OR
+              (excluded.uploaded_at = tower_period_observations.uploaded_at AND excluded.attachment_id > tower_period_observations.attachment_id)))`,
+      args: [
+        item.area,
+        JSON.stringify(item),
+        item.observedAt,
+        item.uploadedAt,
+        item.sourceAttachmentId,
+        period.id,
+        binding.id,
+        binding.id,
+        binding.guildId,
+        binding.channelId,
+      ],
+    })
+  },
+
+  async closeReportingPeriod(
+    binding: TowerBinding,
+    period: TowerReportingPeriod,
+    endsAt: number,
+  ): Promise<TowerReportingPeriod> {
+    await database.execute({
+      sql: 'UPDATE tower_reporting_periods SET ends_at = MIN(ends_at, ?) WHERE id = ? AND binding_id = ? AND started_at < ?',
+      args: [endsAt, period.id, binding.id, endsAt],
+    })
+    return { ...period, endsAt: Math.min(period.endsAt, endsAt) }
+  },
+  async getReportingPeriod(
+    binding: TowerBinding,
+  ): Promise<TowerReportingPeriod | null> {
+    const result = await database.execute({
+      sql: 'SELECT * FROM tower_reporting_periods WHERE binding_id = ? ORDER BY started_at DESC LIMIT 1',
+      args: [binding.id],
+    })
+    const row = result.rows[0]
+    return row
+      ? {
+          id: String(row.id),
+          bindingId: String(row.binding_id),
+          startedAt: Number(row.started_at),
+          endsAt: Number(row.ends_at),
+          messageId: typeof row.message_id === 'string' ? row.message_id : null,
+        }
+      : null
+  },
+
+  async createReportingPeriod(
+    binding: TowerBinding,
+    startedAt: number,
+  ): Promise<TowerReportingPeriod> {
+    const inserted = await database.execute({
+      sql: `INSERT INTO tower_reporting_periods (id, binding_id, started_at, ends_at)
+        SELECT ?, binding_id, ?, ? FROM tower_channels
+        WHERE binding_id = ? AND guild_id = ? AND channel_id = ?
+        ON CONFLICT(binding_id, started_at) DO NOTHING`,
+      args: [
+        randomUUID(),
+        startedAt,
+        startedAt + towerReportingPeriodMs,
+        binding.id,
+        binding.guildId,
+        binding.channelId,
+      ],
+    })
+    const period = await this.getReportingPeriod(binding)
+    if (!period) throw new Error('Tower channel configuration changed')
+    if (inserted.rowsAffected > 0) {
+      for (const item of await this.list(binding))
+        await this.savePeriodObservation(binding, period, item)
+    }
+    return period
+  },
+
+  async setReportingMessage(
+    binding: TowerBinding,
+    periodId: string,
+    messageId: string,
+  ): Promise<void> {
+    const result = await database.execute({
+      sql: `UPDATE tower_reporting_periods SET message_id = ? WHERE id = ? AND binding_id = ?
+        AND EXISTS (SELECT 1 FROM tower_channels WHERE binding_id = ? AND guild_id = ? AND channel_id = ?)`,
+      args: [
+        messageId,
+        periodId,
+        binding.id,
+        binding.id,
+        binding.guildId,
+        binding.channelId,
+      ],
+    })
+    if (result.rowsAffected === 0)
+      throw new Error('Tower channel configuration changed')
+  },
   async rememberLocale(
     userId: string,
     locale: string,
@@ -96,7 +287,7 @@ export const towerStore = {
     channelId: string,
   ): Promise<TowerBinding | null> {
     const result = await database.execute({
-      sql: `SELECT binding_id, server_number FROM tower_channels WHERE guild_id = ? AND channel_id = ?`,
+      sql: `SELECT binding_id, server_number, adopt_existing_summary FROM tower_channels WHERE guild_id = ? AND channel_id = ?`,
       args: [guildId, channelId],
     })
     const row = result.rows[0]
@@ -106,6 +297,7 @@ export const towerStore = {
           guildId,
           channelId,
           serverNumber: Number(row.server_number),
+          adoptExistingSummary: Number(row.adopt_existing_summary) === 1,
         }
       : null
   },
@@ -119,11 +311,13 @@ export const towerStore = {
     await database.batch(
       [
         {
-          sql: `INSERT INTO tower_channels (channel_id, guild_id, binding_id, server_number, updated_by, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)
+          sql: `INSERT INTO tower_channels (channel_id, guild_id, binding_id, server_number, updated_by, updated_at, adopt_existing_summary)
+          VALUES (?, ?, ?, ?, ?, ?, 0)
           ON CONFLICT(channel_id) DO UPDATE SET
             binding_id = CASE WHEN tower_channels.server_number = excluded.server_number
               AND tower_channels.guild_id = excluded.guild_id THEN tower_channels.binding_id ELSE excluded.binding_id END,
+            adopt_existing_summary = CASE WHEN tower_channels.server_number = excluded.server_number
+              AND tower_channels.guild_id = excluded.guild_id THEN tower_channels.adopt_existing_summary ELSE 0 END,
             guild_id = excluded.guild_id, server_number = excluded.server_number,
             updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
           args: [
@@ -136,6 +330,8 @@ export const towerStore = {
           ],
         },
         `DELETE FROM tower_observations WHERE binding_id NOT IN (SELECT binding_id FROM tower_channels)`,
+        `DELETE FROM tower_reporting_periods WHERE binding_id NOT IN (SELECT binding_id FROM tower_channels)`,
+        `DELETE FROM tower_period_observations WHERE period_id NOT IN (SELECT id FROM tower_reporting_periods)`,
       ],
       'write',
     )
@@ -149,6 +345,8 @@ export const towerStore = {
           args: [guildId, channelId],
         },
         `DELETE FROM tower_observations WHERE binding_id NOT IN (SELECT binding_id FROM tower_channels)`,
+        `DELETE FROM tower_reporting_periods WHERE binding_id NOT IN (SELECT binding_id FROM tower_channels)`,
+        `DELETE FROM tower_period_observations WHERE period_id NOT IN (SELECT id FROM tower_reporting_periods)`,
       ],
       'write',
     )

@@ -3,6 +3,32 @@ import type { TranslationLanguage } from '../translation/languages.js'
 const japanese = {
   title: 'バフタワー｜日本時間 (UTC+9)｜占領可能時刻の目安',
   empty: '（未報告）',
+  draftNewEarly:
+    '今はまだ期間内です。新しい期間を公開すると、現在の期間を終了して前回の総表を残します。',
+  privateDraft: '非公開の下書き｜<#{channel}>｜まだ公開していません',
+  publishCurrent: '今回を更新',
+  publishPrevious: '前回を更新',
+  publishNew: '新しい期間を作成',
+  selectPeriod: '公開先の期間を選択',
+  publishDraft: '公開する',
+  cancelDraft: '下書きを破棄',
+  draftAdvice:
+    '推奨：{target}。公開先を選び、プレビューを確認してから「公開する」を押してください。',
+  noDraft: '下書きはありません。このチャンネルにタワー画像を投稿してください。',
+  draftOwner: 'この下書きは別のユーザーのものです。',
+  draftGone:
+    '下書きは公開済み、破棄済み、またはチャンネル設定が変更されています。',
+  draftStale:
+    '画像が追加され、下書きが更新されました。最新の内容を確認してから公開してください。',
+  draftCancelled: '下書きを破棄しました。公開済みの記録は変更していません。',
+  publishDone: '公開しました：{url}',
+  publishFailed:
+    '公開できませんでした。下書きは保存されています。公開先を確認して再試行してください。',
+  publishNoAccess: 'このチャンネルへの投稿権限がないため公開できません。',
+  dmUnavailable:
+    'DMを送信できません。ここで /tower draft を実行すると、自分だけが見られる下書きを確認できます。解析結果は公開していません。',
+  period: '今回：{start} → {end}',
+  previousReport: '前回の報告',
   timingUtc: 'UTC時計で校正',
   timeUncertain: '時刻に誤差の可能性あり',
   timeOld: '撮影から30分超・時刻に誤差の可能性あり',
@@ -36,7 +62,7 @@ const japanese = {
   botPermissions:
     'Bot に「チャンネルを見る」「メッセージを送信」「メッセージ履歴を読む」権限が必要です。',
   setup:
-    '<#{channel}> を {server} サーバー専用に設定しました。対象：7・8・9・12・14・17・18・19 区。\n占領可能時刻＝画像から推定した撮影時刻（不明なら投稿時刻）＋シールド残り時間。表示は日本時間 UTC+9。画像付きの投稿は解析の成否にかかわらず処理後に削除します。サーバーを変更すると、このチャンネルの記録を消去します。',
+    '<#{channel}> を {server} サーバー専用に設定しました。対象：7・8・9・12・14・17・18・19 区。\n占領可能時刻＝画像から推定した撮影時刻（不明なら投稿時刻）＋シールド残り時間。表示は日本時間 UTC+9。画像はDMの下書きで確認し、公開を選ぶまで総表に反映しません。画像付きの投稿は処理後に削除します。サーバーを変更すると、このチャンネルの記録を消去します。',
   trackingDisabled:
     '画像検出は未有効です。TOWER_TRACKING_ENABLED=true と Discord Message Content Intent を有効にして Bot を再起動してください。',
   aiMissing: 'AI_API_KEY が未設定です。設定後に Bot を再起動してください。',
@@ -51,6 +77,28 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
   zt: {
     title: '增益塔｜日本時間 (UTC+9)｜預估可佔領時間',
     empty: '（留空）',
+    draftNewEarly: '目前仍在本期範圍內；確認另開新期會結束本期，保留原總表。',
+    privateDraft: '私人草稿｜<#{channel}>｜尚未發布',
+    publishCurrent: '更新本期',
+    publishPrevious: '更新前一期',
+    publishNew: '另開新一期',
+    selectPeriod: '選擇要發布的期別',
+    publishDraft: '確認發布',
+    cancelDraft: '取消草稿',
+    draftAdvice:
+      '建議：{target}。先選擇期別並確認預覽，按「確認發布」才會公開。',
+    noDraft: '目前沒有待發布的草稿，請在此頻道上傳增益塔圖片。',
+    draftOwner: '這份草稿屬於其他使用者。',
+    draftGone: '草稿已發布、取消，或頻道設定已變更。',
+    draftStale: '有新圖片加入，草稿已更新；請確認最新預覽後再發布。',
+    draftCancelled: '已取消草稿，公開紀錄保持不變。',
+    publishDone: '已發布：{url}',
+    publishFailed: '無法發布，草稿仍已保留；請確認期別後重試。',
+    publishNoAccess: '你目前沒有此頻道的發送權限，無法發布。',
+    dmUnavailable:
+      'Bot 無法傳送私訊。請在此頻道使用 /tower draft，只有你能看到草稿；解析結果尚未公開。',
+    period: '本期：{start} → {end}',
+    previousReport: '前期回報',
     timingUtc: 'UTC 校準',
     timeUncertain: '可能有誤差',
     timeOld: '截圖超過 30 分鐘，可能有誤差',
@@ -77,7 +125,7 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     botPermissions:
       'Bot 需要該頻道的「檢視頻道」、「傳送訊息」與「讀取訊息歷史」權限。',
     setup:
-      '已設定 <#{channel}> 只記錄 {server} 服的 7、8、9、12、14、17、18、19 區。\n可佔領時間＝圖片推定截圖時間（無法判斷時用上傳時間）＋護盾倒數，統一顯示日本時間 UTC+9。含圖片的訊息不論解析成功或失敗，處理後都會刪除。切換伺服器會清除該頻道的原有紀錄。',
+      '已設定 <#{channel}> 只記錄 {server} 服的 7、8、9、12、14、17、18、19 區。\n可佔領時間＝圖片推定截圖時間（無法判斷時用上傳時間）＋護盾倒數，統一顯示日本時間 UTC+9。圖片會先以私訊提供草稿，確認發布後才會更新總表；原圖處理後刪除。切換伺服器會清除該頻道的原有紀錄。',
     trackingDisabled:
       '尚未啟用圖片偵測：請設定 TOWER_TRACKING_ENABLED=true，啟用 Discord Message Content Intent 並重啟 Bot。',
     aiMissing: '尚未設定 AI_API_KEY；設定後重啟 Bot 才能辨識圖片。',
@@ -88,6 +136,33 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
   en: {
     title: 'Buff towers | Japan time (UTC+9) | Estimated capture time',
     empty: '(Not reported)',
+    draftNewEarly:
+      'The current period is still open. Publishing a new period will close it and preserve its summary.',
+    privateDraft: 'Private draft | <#{channel}> | Not published',
+    publishCurrent: 'Update current period',
+    publishPrevious: 'Update previous period',
+    publishNew: 'Start a new period',
+    selectPeriod: 'Choose a reporting period',
+    publishDraft: 'Publish',
+    cancelDraft: 'Discard draft',
+    draftAdvice:
+      'Suggested: {target}. Choose a period and review the preview before pressing Publish.',
+    noDraft:
+      'You have no pending draft. Upload tower screenshots in this channel.',
+    draftOwner: 'This draft belongs to another user.',
+    draftGone:
+      'This draft was published, discarded, or its channel configuration changed.',
+    draftStale:
+      'New images changed this draft. Review the latest preview before publishing.',
+    draftCancelled: 'Draft discarded. Published records were kept.',
+    publishDone: 'Published: {url}',
+    publishFailed:
+      'Publication failed. Your draft is saved; review the target period and try again.',
+    publishNoAccess: 'You no longer have permission to post in this channel.',
+    dmUnavailable:
+      'The bot cannot send you DMs. Use /tower draft in this channel for a private preview. The analysis has not been published.',
+    period: 'Period: {start} → {end}',
+    previousReport: 'Previous report',
     timingUtc: 'UTC clock',
     timeUncertain: 'Time may be inaccurate',
     timeOld: 'Over 30 minutes old; time may be inaccurate',
@@ -120,7 +195,7 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     botPermissions:
       'The bot needs View Channel, Send Messages, and Read Message History permissions.',
     setup:
-      '<#{channel}> now tracks server {server}, areas 7, 8, 9, 12, 14, 17, 18, and 19.\nCapture time = estimated screenshot time (or upload time when unknown) + shield countdown, displayed in Japan time (UTC+9). Image posts are deleted after processing, including failed readings. Switching servers clears this channel’s records.',
+      '<#{channel}> now tracks server {server}, areas 7, 8, 9, 12, 14, 17, 18, and 19.\nCapture time = estimated screenshot time (or upload time when unknown) + shield countdown, displayed in Japan time (UTC+9). Images are previewed in private DMs; records update only after publication. Source images are deleted after processing. Switching servers clears this channel’s records.',
     trackingDisabled:
       'Image detection is disabled. Set TOWER_TRACKING_ENABLED=true, enable Discord Message Content Intent, and restart the bot.',
     aiMissing:
@@ -132,6 +207,31 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
   ko: {
     title: '버프 타워｜일본 시간 (UTC+9)｜예상 점령 가능 시각',
     empty: '（미보고）',
+    draftNewEarly:
+      '아직 현재 기간 내입니다. 새 기간을 게시하면 현재 기간을 종료하고 이전 총표를 보관합니다.',
+    privateDraft: '비공개 초안｜<#{channel}>｜아직 게시되지 않음',
+    publishCurrent: '이번 기간 업데이트',
+    publishPrevious: '이전 기간 업데이트',
+    publishNew: '새 기간 시작',
+    selectPeriod: '게시할 기간 선택',
+    publishDraft: '게시 확인',
+    cancelDraft: '초안 취소',
+    draftAdvice:
+      '추천: {target}. 기간을 선택하고 미리보기를 확인한 후 게시해 주세요.',
+    noDraft: '대기 중인 초안이 없습니다. 이 채널에 타워 이미지를 올려 주세요.',
+    draftOwner: '다른 사용자의 초안입니다.',
+    draftGone: '초안이 게시 또는 취소되었거나 채널 설정이 변경되었습니다.',
+    draftStale:
+      '새 이미지로 초안이 변경되었습니다. 최신 미리보기를 확인해 주세요.',
+    draftCancelled: '초안을 취소했습니다. 공개 기록은 유지됩니다.',
+    publishDone: '게시 완료: {url}',
+    publishFailed:
+      '게시하지 못했습니다. 초안은 저장되어 있습니다. 기간을 확인하고 다시 시도해 주세요.',
+    publishNoAccess: '이 채널에 메시지를 보낼 권한이 없어 게시할 수 없습니다.',
+    dmUnavailable:
+      '개인 메시지를 보낼 수 없습니다. 이 채널에서 /tower draft를 사용하면 본인만 초안을 볼 수 있습니다. 분석 결과는 공개되지 않았습니다.',
+    period: '이번 기간: {start} → {end}',
+    previousReport: '이전 보고',
     timingUtc: 'UTC 시각 보정',
     timeUncertain: '시간에 오차가 있을 수 있음',
     timeOld: '촬영 후 30분 초과·시간에 오차가 있을 수 있음',
@@ -162,7 +262,7 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     botPermissions:
       '봇에 채널 보기, 메시지 보내기, 메시지 기록 보기 권한이 필요합니다.',
     setup:
-      '<#{channel}>에서 {server} 서버의 7, 8, 9, 12, 14, 17, 18, 19구역을 기록합니다.\n점령 가능 시각＝이미지에서 추정한 촬영 시각(알 수 없으면 업로드 시각)＋보호막 남은 시간. 일본 시간 UTC+9로 표시합니다. 이미지 게시물은 분석 성공 여부와 관계없이 처리 후 삭제합니다. 서버를 변경하면 이 채널의 기록이 지워집니다.',
+      '<#{channel}>에서 {server} 서버의 7, 8, 9, 12, 14, 17, 18, 19구역을 기록합니다.\n점령 가능 시각＝이미지에서 추정한 촬영 시각(알 수 없으면 업로드 시각)＋보호막 남은 시간. 일본 시간 UTC+9로 표시합니다. 이미지는 개인 메시지 초안으로 확인하고 게시한 후에만 기록을 변경합니다. 원본 이미지는 처리 후 삭제합니다. 서버를 변경하면 이 채널의 기록이 지워집니다.',
     trackingDisabled:
       '이미지 감지가 꺼져 있습니다. TOWER_TRACKING_ENABLED=true와 Discord Message Content Intent를 활성화한 후 봇을 다시 시작해 주세요.',
     aiMissing:

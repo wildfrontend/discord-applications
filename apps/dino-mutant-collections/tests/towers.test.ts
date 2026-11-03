@@ -6,12 +6,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import {
-  ChannelType,
-  Collection,
-  MessageFlags,
-  PermissionFlagsBits,
-} from 'discord.js'
+import { ChannelType, Collection, MessageFlags } from 'discord.js'
 import {
   formatJapaneseTime,
   observeTower,
@@ -50,13 +45,22 @@ legacy
     'old-message',
     'old-attachment',
   )
+legacy.exec(`CREATE TABLE tower_channels (
+  channel_id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, binding_id TEXT NOT NULL UNIQUE,
+  server_number INTEGER NOT NULL, updated_by TEXT NOT NULL, updated_at INTEGER NOT NULL
+);
+INSERT INTO tower_channels VALUES ('legacy-channel', 'legacy-guild', 'legacy', 27, 'admin', 1793685600000);`)
 legacy.close()
 const { towerStore } = await import('../src/towers/store.js')
 const { handleTowerMessage, startTowerFeature } = await import(
   '../src/towers/feature.js'
 )
 const { towerImageClient } = await import('../src/towers/ai-client.js')
-const { towerLanguage } = await import('../src/towers/i18n.js')
+const { towerDraftStore } = await import('../src/towers/drafts.js')
+const { handleTowerDraftInteraction } = await import(
+  '../src/towers/draft-flow.js'
+)
+const { updateTowerSummary } = await import('../src/towers/summary.js')
 const { default: towerCommand } = await import('../src/commands/tower.js')
 const { closeDatabases } = await import('../src/database.js')
 
@@ -126,6 +130,11 @@ test('migrates old upload-based observations without changing their availability
   assert.equal(item.availableAt, 1793689200000)
   assert.equal(item.timeBasis, 'upload')
   assert.equal(item.clock, undefined)
+  assert.equal(
+    (await towerStore.getBinding('legacy-guild', 'legacy-channel'))
+      ?.adoptExistingSummary,
+    true,
+  )
 })
 
 test('extracts optional right-corner clock data without guessing an unreadable UTC label', () => {
@@ -294,92 +303,477 @@ test('adds only the remaining countdown to upload time and renders all eight tow
   )
 })
 
+type TestPayload = {
+  content: string
+  allowedMentions?: object
+  components?: Array<{ toJSON(): unknown }>
+}
 let counter = 0
 async function fixture(bound = true, locale: string | null = 'zh-TW') {
-  const channelId = `channel-${++counter}`
-  const userId = `user-${counter}`
+  const userId = `user-${++counter}`
+  const channelId = `channel-${counter}`
   if (locale) await towerStore.rememberLocale(userId, locale)
-  const replies: Array<{ content: string; allowedMentions: object }> = []
+  const publicMessages: TestPayload[] = []
+  const privateMessages: TestPayload[] = []
   const operations: string[] = []
+  const posted = new Collection<string, ReturnType<typeof output>>()
+  let response: TowerRecognition = recognized()
+  let canPost = true
   let deleted = 0
   let calls = 0
-  let response: TowerRecognition = recognized()
   const attachment = (id = '100') => ({
     id,
     name: 'tower.jpeg',
+    size: 1000,
     contentType: 'image/jpeg',
-    size: 1024,
     url: `https://cdn.discordapp.com/attachments/1/2/${id}.jpeg`,
   })
-  const message = {
-    id: 'message',
-    guildId: 'guild',
-    channelId,
-    inGuild: () => true,
-    author: { id: userId, bot: false },
-    content: '',
-    webhookId: null,
-    createdTimestamp: uploadedAt,
-    attachments: new Collection([['100', attachment()]]),
-    channel: {
-      send: async (payload: { content: string; allowedMentions: object }) => {
-        operations.push('sent')
-        replies.push(payload)
-        return {
-          edit: async (update: { content: string }) => {
-            Object.assign(payload, update)
-          },
-        }
+  function output(payload: TestPayload, privateMessage: boolean) {
+    const list = privateMessage ? privateMessages : publicMessages
+    list.push(payload)
+    operations.push(privateMessage ? 'private' : 'published')
+    const result = {
+      id: `${channelId}-${privateMessage ? 'dm' : 'summary'}-${list.length}`,
+      author: { id: 'tower-bot' },
+      createdTimestamp: message.createdTimestamp + 100,
+      get content() {
+        return payload.content
+      },
+      url: `https://discord.com/channels/guild/${channelId}/${list.length}`,
+      edit: async (update: TestPayload) => {
+        Object.assign(payload, update)
+        operations.push(privateMessage ? 'private-edited' : 'public-edited')
+        return result
+      },
+    }
+    return result
+  }
+  const channel = {
+    id: channelId,
+    type: ChannelType.GuildText,
+    guild: { members: { fetch: async (id: string) => ({ id }) } },
+    permissionsFor: () => ({ has: () => canPost }),
+    messages: {
+      fetch: async (options: { message?: string; limit?: number }) => {
+        if (!options.message) return new Collection([...posted].reverse())
+        const value = posted.get(options.message)
+        if (!value)
+          throw Object.assign(new Error('Unknown message'), { code: 10008 })
+        return value
       },
     },
-    reply: async () => {
-      throw new Error('Do not reply to source images')
+    send: async (payload: TestPayload) => {
+      const result = output(payload, false)
+      posted.set(result.id, result)
+      return result
     },
+  }
+  const client = {
+    user: { id: 'tower-bot' },
+    channels: { fetch: async () => channel },
+  }
+  const message = {
+    id: 'source',
+    guildId: 'guild',
+    channelId,
+    client,
+    channel,
+    inGuild: () => true,
+    author: {
+      id: userId,
+      bot: false,
+      send: async (payload: TestPayload) => output(payload, true),
+    },
+    webhookId: null,
+    content: '',
+    createdTimestamp: uploadedAt,
+    attachments: new Collection([['100', attachment()]]),
     deletable: true,
     fetch: async (_force: boolean) => message,
     delete: async () => {
-      operations.push('deleted')
       deleted++
+      operations.push('deleted')
     },
   }
   if (bound) await towerStore.bind('guild', channelId, 27, 'admin')
-  const client = {
+  const imageClient = {
     recognize: async () => {
       calls++
       return response
     },
   }
+  const binding = async () => {
+    const value = await towerStore.getBinding('guild', channelId)
+    assert.ok(value)
+    return value
+  }
+  const draft = async () => {
+    const value = await towerDraftStore.getForUser(await binding(), userId)
+    assert.ok(value)
+    return value
+  }
+  async function click(
+    customId: string,
+    options: { userId?: string; values?: string[] } = {},
+  ) {
+    let reply: TestPayload | undefined
+    const interaction = {
+      customId,
+      locale: locale ?? 'ja',
+      client,
+      user: { id: options.userId ?? userId },
+      values: options.values ?? [],
+      isStringSelectMenu: () => options.values !== undefined,
+      reply: async (payload: TestPayload) => {
+        reply = payload
+      },
+      deferUpdate: async () => {},
+      editReply: async (payload: TestPayload) => {
+        reply = payload
+      },
+    }
+    await handleTowerDraftInteraction(interaction as never)
+    assert.ok(reply)
+    return reply
+  }
   return {
     message,
     client,
+    channel,
     attachment,
-    replies,
+    publicMessages,
+    privateMessages,
+    posted,
     operations,
+    binding,
+    draft,
+    click,
     deleted: () => deleted,
     calls: () => calls,
-    respond: (result: TowerRecognition) => {
-      response = result
+    canPost: (value: boolean) => {
+      canPost = value
     },
-    handle: () => handleTowerMessage(message as never, client),
-    binding: async () => {
-      const binding = await towerStore.getBinding('guild', channelId)
-      assert.ok(binding)
-      return binding
+    respond: (value: TowerRecognition) => {
+      response = value
     },
+    handle: () => handleTowerMessage(message as never, imageClient),
   }
 }
 
-test('unconfigured channels, bots, webhooks, and non-image attachments never call AI', async () => {
+function publishId(payload: TestPayload): string {
+  const row = payload.components?.[1].toJSON() as {
+    components: Array<{ custom_id: string }>
+  }
+  return row.components[0].custom_id
+}
+function targetId(payload: TestPayload): string {
+  const row = payload.components?.[0].toJSON() as {
+    components: Array<{ custom_id: string }>
+  }
+  return row.components[0].custom_id
+}
+
+test('uploads produce private previews, keep public records unchanged, and delete the source', async () => {
+  const f = await fixture()
+  await f.handle()
+  assert.equal(f.publicMessages.length, 0)
+  assert.equal(f.privateMessages.length, 1)
+  assert.match(f.privateMessages[0].content, /私人草稿/)
+  assert.match(f.privateMessages[0].content, /27-19 \[PRIZE\] STONE/)
+  assert.equal((await f.draft()).observations.length, 1)
+  assert.deepEqual(await towerStore.list(await f.binding()), [])
+  assert.equal(await towerStore.getReportingPeriod(await f.binding()), null)
+  assert.deepEqual(f.operations, ['private', 'deleted'])
+})
+
+test('separate uploads accumulate privately and publishing creates one merged table', async () => {
+  const f = await fixture()
+  await f.handle()
+  f.message.createdTimestamp += 60_000
+  f.respond(recognized(7))
+  await f.handle()
+  assert.equal((await f.draft()).observations.length, 2)
+  assert.equal(f.publicMessages.length, 0)
+  const done = await f.click(publishId(f.privateMessages[1]))
+  assert.match(done.content, /已發布/)
+  assert.equal(f.publicMessages.length, 1)
+  assert.match(f.publicMessages[0].content, /27-7 \[PRIZE\] STONE/)
+  assert.match(f.publicMessages[0].content, /27-19 \[PRIZE\] STONE/)
+  assert.equal((await towerStore.list(await f.binding())).length, 2)
+  assert.equal(
+    await towerDraftStore.getForUser(await f.binding(), f.message.author.id),
+    null,
+  )
+  const period = await towerStore.getReportingPeriod(await f.binding())
+  assert.equal(period?.startedAt, uploadedAt)
+  assert.equal(period?.endsAt, uploadedAt + 48 * 3600_000)
+})
+
+test('new previews do not change a published table until publication, which then edits it in place', async () => {
+  const f = await fixture()
+  await f.handle()
+  await f.click(publishId(f.privateMessages[0]))
+  const old = f.publicMessages[0].content
+  const id = (await towerStore.getReportingPeriod(await f.binding()))?.messageId
+  f.message.createdTimestamp += 60_000
+  f.respond(recognized(8))
+  await f.handle()
+  assert.equal(f.publicMessages[0].content, old)
+  assert.equal((await towerStore.list(await f.binding())).length, 1)
+  await f.click(publishId(f.privateMessages[1]))
+  assert.equal(f.publicMessages.length, 1)
+  assert.equal(
+    (await towerStore.getReportingPeriod(await f.binding()))?.messageId,
+    id,
+  )
+  assert.match(f.publicMessages[0].content, /27-8 \[PRIZE\] STONE/)
+})
+
+test('failed reads remain private, preserve draft rows, and never update public records', async () => {
+  const f = await fixture()
+  await f.handle()
+  f.message.createdTimestamp += 60_000
+  f.respond({ kind: 'unreadable' })
+  await f.handle()
+  assert.match(f.privateMessages[1].content, /無法解析/)
+  assert.equal((await f.draft()).observations.length, 1)
+  assert.equal(f.publicMessages.length, 0)
+  assert.equal(f.deleted(), 2)
+  assert.deepEqual(await towerStore.list(await f.binding()), [])
+})
+
+test('other servers, invalid formats, and provider errors send private notices and remove images', async () => {
+  const f = await fixture()
+  f.respond(recognized(19, 28))
+  await f.handle()
+  assert.match(f.privateMessages[0].content, /其他伺服器/)
+  assert.equal((await f.draft()).observations.length, 0)
+  f.message.attachments.set('100', {
+    ...f.attachment(),
+    size: 21 * 1024 * 1024,
+  })
+  await f.handle()
+  assert.match(f.privateMessages[1].content, /無法解析/)
+  f.message.attachments.set('100', f.attachment())
+  await handleTowerMessage(f.message as never, {
+    recognize: async () => {
+      throw new Error('provider failed')
+    },
+  })
+  assert.match(f.privateMessages[2].content, /無法解析/)
+  assert.equal(f.deleted(), 3)
+  assert.equal(f.publicMessages.length, 0)
+})
+
+test('blocked DMs expose only a generic recovery notice and retain a resumable private draft', async () => {
+  const f = await fixture()
+  await handleTowerMessage(
+    {
+      ...f.message,
+      author: {
+        ...f.message.author,
+        send: async () => {
+          throw new Error('DM blocked')
+        },
+      },
+    } as never,
+    { recognize: async () => recognized() },
+  )
+  assert.equal(f.publicMessages.length, 1)
+  assert.match(f.publicMessages[0].content, /tower draft/)
+  assert.doesNotMatch(f.publicMessages[0].content, /STONE|27-19/)
+  assert.equal((await f.draft()).observations.length, 1)
+  assert.deepEqual(await towerStore.list(await f.binding()), [])
+  assert.equal(f.deleted(), 1)
+})
+
+test('stale preview buttons refresh the private draft rather than publishing unreviewed images', async () => {
+  const f = await fixture()
+  await f.handle()
+  const oldButton = publishId(f.privateMessages[0])
+  f.message.createdTimestamp += 1000
+  f.respond(recognized(7))
+  await f.handle()
+  const refreshed = await f.click(oldButton)
+  assert.match(refreshed.content, /有新圖片/)
+  assert.equal(f.publicMessages.length, 0)
+  await f.click(publishId(refreshed))
+  assert.equal(f.publicMessages.length, 1)
+  assert.equal((await towerStore.list(await f.binding())).length, 2)
+})
+
+test('another user cannot inspect or publish a draft, and cancellation never changes public records', async () => {
+  const f = await fixture()
+  await f.handle()
+  const draft = await f.draft()
+  const denied = await f.click(publishId(f.privateMessages[0]), {
+    userId: 'outsider',
+  })
+  assert.match(denied.content, /其他使用者/)
+  assert.equal(f.publicMessages.length, 0)
+  await f.click(`tower-cancel:${draft.id}:${draft.revision}`)
+  assert.equal(await towerDraftStore.get(draft.id), null)
+  assert.deepEqual(await towerStore.list(await f.binding()), [])
+})
+
+test('loss of channel permissions prevents publication from an old DM', async () => {
+  const f = await fixture()
+  await f.handle()
+  f.canPost(false)
+  const result = await f.click(publishId(f.privateMessages[0]))
+  assert.match(result.content, /發送權限/)
+  assert.equal(f.publicMessages.length, 0)
+  assert.ok(await f.draft())
+})
+
+test('target selection is private; a new period at 48 hours preserves the older summary', async () => {
+  const f = await fixture()
+  await f.handle()
+  await f.click(publishId(f.privateMessages[0]))
+  const first = await towerStore.getReportingPeriod(await f.binding())
+  assert.ok(first)
+  const original = f.publicMessages[0].content
+  f.message.createdTimestamp = first.endsAt
+  f.respond(recognized(7))
+  await f.handle()
+  const selected = await f.click(targetId(f.privateMessages[1]), {
+    values: ['new'],
+  })
+  assert.equal(f.publicMessages.length, 1)
+  assert.equal(f.publicMessages[0].content, original)
+  await f.click(publishId(selected))
+  assert.equal(f.publicMessages.length, 2)
+  assert.equal(f.publicMessages[0].content, original)
+  assert.match(f.publicMessages[1].content, /前期回報/)
+  assert.equal(
+    (await towerStore.getReportingPeriod(await f.binding()))?.startedAt,
+    first.endsAt,
+  )
+})
+
+test('publishing a late screenshot to the previous period edits its snapshot without overwriting the current period', async () => {
+  const f = await fixture()
+  await f.handle()
+  await f.click(publishId(f.privateMessages[0]))
+  const first = await towerStore.getReportingPeriod(await f.binding())
+  assert.ok(first)
+  f.message.createdTimestamp = first.endsAt
+  f.respond(recognized(7))
+  await f.handle()
+  await f.click(publishId(f.privateMessages[1]))
+  const second = await towerStore.getReportingPeriod(await f.binding())
+  assert.ok(second)
+  const currentContent = f.publicMessages[1].content
+  // A corrected UTC clock lies just before the current window but is uploaded now.
+  f.message.createdTimestamp = first.endsAt + 60_000
+  const reading = recognized(12)
+  assert.equal(reading.kind, 'tower')
+  const time = new Date(first.endsAt - 60_000).toISOString().slice(11, 16)
+  f.respond({
+    ...reading,
+    reading: { ...reading.reading, clock: { time, isUtc: true } },
+  })
+  await f.handle()
+  const selected = await f.click(targetId(f.privateMessages[2]), {
+    values: [first.id],
+  })
+  assert.equal(f.publicMessages[1].content, currentContent)
+  await f.click(publishId(selected))
+  assert.match(f.publicMessages[0].content, /27-12 \[PRIZE\] STONE/)
+  assert.equal(f.publicMessages[1].content, currentContent)
+  assert.equal(
+    (await towerStore.getReportingPeriod(await f.binding()))?.id,
+    second.id,
+  )
+  assert.ok(
+    (await towerStore.listPeriodObservations(await f.binding(), first)).some(
+      (item) => item.area === 12,
+    ),
+  )
+  assert.equal(
+    (await towerStore.listPeriodObservations(await f.binding(), second)).some(
+      (item) => item.area === 12,
+    ),
+    false,
+  )
+})
+
+test('forcing a new period closes the old range, while deleted summaries are recreated safely', async () => {
+  const f = await fixture()
+  await f.handle()
+  await f.click(publishId(f.privateMessages[0]))
+  const first = await towerStore.getReportingPeriod(await f.binding())
+  assert.ok(first?.messageId)
+  f.message.createdTimestamp += 3600_000
+  f.respond(recognized(7))
+  await f.handle()
+  const selected = await f.click(targetId(f.privateMessages[1]), {
+    values: ['new'],
+  })
+  await f.click(publishId(selected))
+  const periods = await towerStore.listReportingPeriods(await f.binding())
+  assert.equal(periods[1].endsAt, periods[0].startedAt)
+  assert.ok(periods[0].messageId)
+  f.posted.delete(periods[0].messageId)
+  f.message.createdTimestamp += 60_000
+  f.respond(recognized(8))
+  await f.handle()
+  await f.click(publishId(f.privateMessages[2]))
+  assert.equal(
+    (await towerStore.getReportingPeriod(await f.binding()))?.id,
+    periods[0].id,
+  )
+  assert.equal(f.publicMessages.length, 3)
+})
+
+test('drafts, published snapshots, and canonical message IDs survive a new process', async () => {
+  const f = await fixture()
+  await f.handle()
+  await f.click(publishId(f.privateMessages[0]))
+  f.message.createdTimestamp += 1000
+  f.respond(recognized(7))
+  await f.handle()
+  const binding = await f.binding()
+  const script = `const { towerStore } = await import('./src/towers/store.ts'); const { towerDraftStore } = await import('./src/towers/drafts.ts');
+    const binding = await towerStore.getBinding('guild', ${JSON.stringify(f.message.channelId)});
+    console.log(JSON.stringify({ period: await towerStore.getReportingPeriod(binding), draft: await towerDraftStore.getForUser(binding, ${JSON.stringify(f.message.author.id)}) }));
+    const { closeDatabases } = await import('./src/database.ts'); closeDatabases();`
+  const result = execFileSync(
+    process.execPath,
+    ['--import', 'tsx', '--input-type=module', '-e', script],
+    {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      env: process.env,
+      encoding: 'utf8',
+    },
+  )
+  assert.deepEqual(JSON.parse(result), {
+    period: await towerStore.getReportingPeriod(binding),
+    draft: await f.draft(),
+  })
+})
+
+test('each uploader uses their own remembered Discord locale, with Japanese as fallback', async () => {
+  for (const [locale, label] of [
+    [null, '非公開'],
+    ['en-US', 'Private draft'],
+    ['zh-TW', '私人草稿'],
+    ['ko', '비공개'],
+  ] as const) {
+    const f = await fixture(true, locale)
+    await f.handle()
+    assert.ok(f.privateMessages[0].content.startsWith(label))
+    assert.equal(f.publicMessages.length, 0)
+  }
+})
+
+test('unconfigured channels, bot messages, and non-image files do not call AI or send DMs', async () => {
   const f = await fixture(false)
   await f.handle()
   await towerStore.bind('guild', f.message.channelId, 27, 'admin')
   f.message.author.bot = true
   await f.handle()
   f.message.author.bot = false
-  await handleTowerMessage(
-    { ...f.message, webhookId: 'webhook' } as never,
-    f.client,
-  )
   f.message.attachments.set('100', {
     ...f.attachment(),
     contentType: 'text/plain',
@@ -387,472 +781,17 @@ test('unconfigured channels, bots, webhooks, and non-image attachments never cal
   })
   await f.handle()
   assert.equal(f.calls(), 0)
-  assert.equal(f.replies.length, 0)
+  assert.equal(f.privateMessages.length, 0)
 })
 
-test('one message with multiple images updates separate towers and replies with one summary', async () => {
+test('cleanup failures are reported privately, and non-image attachments are retained', async () => {
   const f = await fixture()
-  f.message.attachments.set('101', f.attachment('101'))
-  const responses = [recognized(7), recognized(19)]
-  await handleTowerMessage(f.message as never, {
-    recognize: async () => responses.shift() ?? { kind: 'unrelated' },
-  })
-  const items = await towerStore.list(await f.binding())
-  assert.deepEqual(
-    items.map((item) => item.area),
-    [7, 19],
-  )
-  assert.ok(
-    items.every(
-      (item) => item.availableAt === Date.parse('2026-11-05T01:00:00+09:00'),
-    ),
-  )
-  assert.equal(f.replies.length, 1)
-  assert.deepEqual(f.replies[0].allowedMentions, {
-    parse: [],
-    repliedUser: false,
-  })
-  assert.equal(f.replies[0].content.match(/（留空）/g)?.length, 6)
-})
-
-test('other servers, unreadable fields, unrelated images and provider errors do not overwrite existing records', async () => {
-  const f = await fixture()
-  await f.handle()
-  const original = await towerStore.list(await f.binding())
-  f.respond(recognized(19, 28))
-  await f.handle()
-  assert.match(f.replies.at(-1)?.content ?? '', /只記錄 27 服/)
-  f.respond({ kind: 'unreadable' })
-  await f.handle()
-  assert.match(f.replies.at(-1)?.content ?? '', /無法解析/)
-  f.respond({ kind: 'unrelated' })
-  const count = f.replies.length
-  await f.handle()
-  assert.equal(f.replies.length, count + 1)
-  assert.match(f.replies.at(-1)?.content ?? '', /無法解析/)
-  await handleTowerMessage(f.message as never, {
-    recognize: async () => {
-      throw new Error('provider failure')
-    },
-  })
-  assert.match(f.replies.at(-1)?.content ?? '', /無法解析/)
-  assert.deepEqual(await towerStore.list(await f.binding()), original)
-})
-
-test('rejects oversized or unsupported images and URLs outside Discord before calling AI', async () => {
-  const f = await fixture()
-  for (const overrides of [
-    { size: 21 * 1024 * 1024 },
-    { name: 'tower.gif', contentType: 'image/gif' },
-    { url: 'https://example.com/image.jpeg' },
-    { url: 'http://cdn.discordapp.com/image.jpeg' },
-  ]) {
-    f.message.attachments.set('100', { ...f.attachment(), ...overrides })
-    await f.handle()
-  }
-  assert.equal(f.calls(), 0)
-  assert.equal((await towerStore.list(await f.binding())).length, 0)
-})
-
-test('compares calibrated capture minutes so an older photo uploaded later cannot replace newer records', async () => {
-  const f = await fixture()
-  const binding = await f.binding()
-  const result = recognized()
-  assert.equal(result.kind, 'tower')
-  const latest = observeTower(
-    { ...result.reading, clock: { time: '07:15', isUtc: true } },
-    Date.parse('2026-11-03T07:16:42Z'),
-    'new',
-    '100',
-  )
-  assert.equal(await towerStore.save(binding, latest), true)
-  assert.deepEqual(await towerStore.list(binding), [latest])
-  const lateOldImage = observeTower(
-    {
-      ...result.reading,
-      occupyingTribe: '[OLD] Owner',
-      clock: { time: '07:11', isUtc: true },
-    },
-    Date.parse('2026-11-03T07:20:42Z'),
-    'late',
-    '101',
-  )
-  assert.equal(await towerStore.save(binding, lateOldImage), false)
-  assert.deepEqual(await towerStore.list(binding), [latest])
-  // Seconds are absent in the image clock; newer uploads break same-minute ties.
-  const sameMinute = observeTower(
-    {
-      ...result.reading,
-      remainingSeconds: 114490,
-      clock: { time: '07:15', isUtc: true },
-    },
-    Date.parse('2026-11-03T07:17:00Z'),
-    'same-minute',
-    '102',
-  )
-  assert.equal(await towerStore.save(binding, sameMinute), true)
-  assert.deepEqual(await towerStore.list(binding), [sameMinute])
-})
-
-test('processing preserves clock metadata and exposes the estimate basis in localized summaries', async () => {
-  const f = await fixture()
-  const result = recognized()
-  assert.equal(result.kind, 'tower')
-  f.message.createdTimestamp = Date.parse('2026-11-03T07:16:42Z')
-  f.respond({
-    ...result,
-    reading: { ...result.reading, clock: { time: '12:56', isUtc: false } },
-  })
-  await f.handle()
-  const [item] = await towerStore.list(await f.binding())
-  assert.equal(item.timeBasis, 'minute-estimate')
-  assert.equal(item.observedAt, Date.parse('2026-11-03T07:11:00Z'))
-  assert.deepEqual(item.clock, { time: '12:56', isUtc: false })
-  assert.match(f.replies[0].content, /分鐘推估/)
-  assert.match(f.replies[0].content, /可能有誤差/)
-  assert.match(f.replies[0].content, /30 分鐘/)
-  assert.equal(item.timeUncertain, true)
-  assert.equal(f.deleted(), 1)
-})
-
-test('a delayed but readable screenshot still updates records with a persisted localized uncertainty marker', async () => {
-  const f = await fixture()
-  const result = recognized()
-  assert.equal(result.kind, 'tower')
-  f.message.createdTimestamp = Date.parse('2026-11-03T08:00:00Z')
-  f.respond({
-    ...result,
-    reading: { ...result.reading, clock: { time: '07:11', isUtc: true } },
-  })
-  await f.handle()
-  const [item] = await towerStore.list(await f.binding())
-  assert.equal(item.observedAt, Date.parse('2026-11-03T07:11:00Z'))
-  assert.equal(item.availableAt, item.observedAt + item.remainingSeconds * 1000)
-  assert.equal(item.timeUncertain, true)
-  assert.match(f.replies[0].content, /截圖超過 30 分鐘，可能有誤差/)
-  assert.equal(f.deleted(), 1)
-  for (const [language, marker] of [
-    ['ja', '誤差'],
-    ['en', 'inaccurate'],
-    ['ko', '오차'],
-  ] as const) {
-    assert.ok(renderTowerSummary(27, [item], language).includes(marker))
-  }
-})
-
-test('newer uploads replace the owner; duplicates and older completed work cannot overwrite them', async () => {
-  const f = await fixture()
-  const binding = await f.binding()
-  assert.equal(await towerStore.save(binding, observation()), true)
-  assert.equal(await towerStore.save(binding, observation()), false)
-  const newer = {
-    ...observation(19, uploadedAt + 1000, '101'),
-    occupyingTribe: '[NEXT] Owner',
-  }
-  assert.equal(await towerStore.save(binding, newer), true)
-  assert.equal(await towerStore.save(binding, observation()), false)
-  assert.deepEqual(await towerStore.list(binding), [newer])
-  assert.equal(
-    await towerStore.save(binding, { ...newer, serverNumber: 28 }),
-    false,
-  )
-  const other = await fixture()
-  assert.deepEqual(await towerStore.list(await other.binding()), [])
-})
-
-test('uploads refresh the same 48-hour cycle and a later occupation starts a new cycle', async () => {
-  const f = await fixture()
-  const binding = await f.binding()
-  const otherTower = observation(7)
-  await towerStore.save(binding, otherTower)
-
-  async function upload(
-    time: string,
-    remainingSeconds: number,
-    tribe = '[PRIZE] STONE',
-  ) {
-    f.message.createdTimestamp = Date.parse(time)
-    const result = recognized()
-    assert.equal(result.kind, 'tower')
-    f.respond({
-      ...result,
-      reading: { ...result.reading, remainingSeconds, occupyingTribe: tribe },
-    })
-    await f.handle()
-    const item = (await towerStore.list(binding)).find(
-      (tower) => tower.area === 19,
-    )
-    assert.ok(item)
-    return item
-  }
-
-  const first = await upload('2026-11-03T09:00:00+09:00', 48 * 3600)
-  assert.equal(formatJapaneseTime(first.availableAt), '11/05 09:00')
-  const refreshed = await upload('2026-11-04T09:00:00+09:00', 24 * 3600)
-  assert.equal(refreshed.availableAt, first.availableAt)
-  assert.ok(refreshed.observedAt > first.observedAt)
-
-  // A newer screenshot may correct the estimate earlier as well as later.
-  const corrected = await upload(
-    '2026-11-04T15:00:00+09:00',
-    17 * 3600 + 50 * 60,
-  )
-  assert.equal(formatJapaneseTime(corrected.availableAt), '11/05 08:50')
-  f.message.createdTimestamp = Date.parse('2026-11-04T16:00:00+09:00')
-  f.respond({ kind: 'unreadable' })
-  await f.handle()
-  assert.deepEqual(
-    (await towerStore.list(binding)).find((tower) => tower.area === 19),
-    corrected,
-  )
-
-  const nextCycle = await upload(
-    '2026-11-05T10:00:00+09:00',
-    48 * 3600,
-    '[NEXT] Owner',
-  )
-  assert.equal(formatJapaneseTime(nextCycle.availableAt), '11/07 10:00')
-  assert.equal(nextCycle.occupyingTribe, '[NEXT] Owner')
-  const lateResult = await upload('2026-11-04T17:00:00+09:00', 16 * 3600)
-  assert.deepEqual(lateResult, nextCycle)
-  assert.deepEqual(
-    (await towerStore.list(binding)).find((tower) => tower.area === 7),
-    otherTower,
-  )
-})
-
-test('same-server setup preserves data; rebinding and disabling reject pending AI work', async () => {
-  const f = await fixture()
-  const binding = await f.binding()
-  await f.handle()
-  await towerStore.bind('guild', f.message.channelId, 27, 'admin')
-  assert.equal((await f.binding()).id, binding.id)
-  assert.equal((await towerStore.list(binding)).length, 1)
-  await handleTowerMessage(
-    {
-      ...f.message,
-      id: 'pending',
-      createdTimestamp: uploadedAt + 5000,
-    } as never,
-    {
-      recognize: async () => {
-        await towerStore.bind('guild', f.message.channelId, 28, 'admin')
-        return recognized()
-      },
-    },
-  )
-  assert.equal(f.replies.length, 1)
-  const rebound = await f.binding()
-  assert.notEqual(rebound.id, binding.id)
-  assert.deepEqual(await towerStore.list(rebound), [])
-  assert.equal(await towerStore.save(binding, observation(7)), false)
-  await towerStore.disable('guild', f.message.channelId)
-  assert.equal(await towerStore.getBinding('guild', f.message.channelId), null)
-  assert.equal(
-    await towerStore.save(rebound, { ...observation(), serverNumber: 28 }),
-    false,
-  )
-})
-
-test('bindings and observations survive a separate process reading the same SQLite data', async () => {
-  const f = await fixture()
-  await f.handle()
-  const script = `const { towerStore } = await import('./src/towers/store.ts');
-    const binding = await towerStore.getBinding('guild', ${JSON.stringify(f.message.channelId)});
-    console.log(JSON.stringify(await towerStore.list(binding)));
-    const { closeDatabases } = await import('./src/database.ts'); closeDatabases();`
-  const output = execFileSync(
-    process.execPath,
-    ['--import', 'tsx', '--input-type=module', '-e', script],
-    {
-      cwd: fileURLToPath(new URL('..', import.meta.url)),
-      encoding: 'utf8',
-      env: process.env,
-    },
-  )
-  assert.deepEqual(JSON.parse(output), await towerStore.list(await f.binding()))
-})
-
-test('setup requires Manage Channels while regular members can list the configured towers', async () => {
-  const f = await fixture()
-  const replies: Array<{ content: string; flags?: number }> = []
-  let action = 'setup'
-  let canManage = false
-  const channel = {
-    id: f.message.channelId,
-    type: ChannelType.GuildText,
-    permissionsFor: () => ({
-      has: (permission: unknown) =>
-        permission === PermissionFlagsBits.ManageChannels ? canManage : true,
-    }),
-  }
-  const interaction = {
-    inCachedGuild: () => true,
-    guildId: 'guild',
-    channelId: channel.id,
-    guild: { channels: { fetch: async () => channel }, members: { me: {} } },
-    member: {},
-    user: { id: 'admin' },
-    locale: 'zh-TW',
-    options: {
-      getSubcommand: () => action,
-      getChannel: () => null,
-      getInteger: () => 28,
-    },
-    reply: async (payload: { content: string; flags?: number }) => {
-      replies.push(payload)
-    },
-    deferReply: async () => {},
-    editReply: async (
-      payload: { content: string; flags?: number } | string,
-    ) => {
-      replies.push(typeof payload === 'string' ? { content: payload } : payload)
-    },
-  }
-  await towerCommand.execute(interaction as never)
-  assert.match(replies.at(-1)?.content ?? '', /管理頻道/)
-  assert.equal(replies.at(-1)?.flags, MessageFlags.Ephemeral)
-  assert.equal((await f.binding()).serverNumber, 27)
-  action = 'list'
-  await towerCommand.execute(interaction as never)
-  assert.match(replies.at(-1)?.content ?? '', /27-17 （留空）/)
-  action = 'setup'
-  canManage = true
-  await towerCommand.execute(interaction as never)
-  assert.equal((await f.binding()).serverNumber, 28)
-  action = 'disable'
-  await towerCommand.execute(interaction as never)
-  assert.equal(await towerStore.getBinding('guild', channel.id), null)
-})
-
-test('the event listener catches rejected work and continues handling later messages', {
-  timeout: 5000,
-}, async () => {
-  const f = await fixture()
-  let listener: ((message: unknown) => void) | undefined
-  startTowerFeature({
-    on: (_event: string, handler: typeof listener) => {
-      listener = handler
-    },
-  } as never)
-  assert.ok(listener)
-  const originalRecognize = towerImageClient.recognize
-  let calls = 0
-  towerImageClient.recognize = async () => recognized(calls++ === 0 ? 19 : 7)
-  const completed = Promise.withResolvers<void>()
-  try {
-    listener({
-      ...f.message,
-      channel: {
-        send: async () => {
-          throw new Error('reply unavailable')
-        },
-      },
-    })
-    listener({
-      ...f.message,
-      id: 'second',
-      createdTimestamp: uploadedAt + 1000,
-      channel: {
-        send: async () => {
-          completed.resolve()
-          return { edit: async () => {} }
-        },
-      },
-    })
-    await completed.promise
-    assert.equal(calls, 2)
-    assert.deepEqual(
-      (await towerStore.list(await f.binding())).map((item) => item.area),
-      [7, 19],
-    )
-  } finally {
-    towerImageClient.recognize = originalRecognize
-  }
-})
-
-test('successful image posts are removed only after the text result is sent, including captions', async () => {
-  const f = await fixture()
-  f.message.content = '27-19 update'
-  await f.handle()
-  assert.deepEqual(f.operations, ['sent', 'deleted'])
-  assert.equal(f.deleted(), 1)
-  assert.equal((await towerStore.list(await f.binding())).length, 1)
-})
-
-test('failed, unrelated, unsupported, and wrong-server image posts are also removed', async () => {
-  for (const result of [
-    { kind: 'unreadable' },
-    { kind: 'unrelated' },
-    recognized(19, 28),
-  ] as TowerRecognition[]) {
-    const f = await fixture()
-    f.respond(result)
-    await f.handle()
-    assert.equal(f.deleted(), 1)
-    assert.equal((await towerStore.list(await f.binding())).length, 0)
-    assert.match(
-      f.replies[0].content,
-      result.kind === 'tower' ? /其他伺服器/ : /無法解析/,
-    )
-  }
-  const unsupported = await fixture()
-  unsupported.message.attachments.set('100', {
-    ...unsupported.attachment(),
-    size: 21 * 1024 * 1024,
-  })
-  await unsupported.handle()
-  assert.equal(unsupported.deleted(), 1)
-  assert.equal(unsupported.calls(), 0)
-  const failed = await fixture()
-  await handleTowerMessage(failed.message as never, {
-    recognize: async () => {
-      throw new Error('AI unavailable')
-    },
-  })
-  assert.equal(failed.deleted(), 1)
-  assert.match(failed.replies[0].content, /無法解析/)
-})
-
-test('posting failures retain source images, while deletion failures preserve the completed result', async () => {
-  const f = await fixture()
-  await assert.rejects(
-    handleTowerMessage(
-      {
-        ...f.message,
-        channel: {
-          send: async () => {
-            throw new Error('send failed')
-          },
-        },
-      } as never,
-      f.client,
-    ),
-    /send failed/,
-  )
-  assert.equal(f.deleted(), 0)
   f.message.deletable = false
   await f.handle()
+  assert.match(f.privateMessages[0].content, /管理訊息/)
+  assert.equal(f.publicMessages.length, 0)
   assert.equal(f.deleted(), 0)
-  assert.match(f.replies.at(-1)?.content ?? '', /管理訊息/)
   f.message.deletable = true
-  const denied = {
-    ...f.message,
-    delete: async () => {
-      throw new Error('delete failed')
-    },
-  }
-  await handleTowerMessage(
-    { ...denied, fetch: async () => denied } as never,
-    f.client,
-  )
-  assert.equal(f.deleted(), 0)
-  assert.match(f.replies.at(-1)?.content ?? '', /無法刪除原圖/)
-  assert.equal((await towerStore.list(await f.binding())).length, 1)
-})
-
-test('does not discard non-image files or attachments added during analysis', async () => {
-  const f = await fixture()
   f.message.attachments.set('file', {
     ...f.attachment('file'),
     name: 'notes.txt',
@@ -860,69 +799,138 @@ test('does not discard non-image files or attachments added during analysis', as
   })
   await f.handle()
   assert.equal(f.deleted(), 0)
-  assert.match(f.replies[0].content, /圖片以外/)
-  f.message.attachments.delete('file')
-  await handleTowerMessage(
-    {
-      ...f.message,
-      fetch: async () => ({
-        ...f.message,
-        attachments: new Collection([['new', f.attachment('new')]]),
-      }),
-    } as never,
-    f.client,
+  assert.match(f.privateMessages[1].content, /圖片以外/)
+})
+
+test('double publication and outdated channel bindings cannot create duplicate public tables', async () => {
+  const f = await fixture()
+  await f.handle()
+  const button = publishId(f.privateMessages[0])
+  await f.click(button)
+  await f.click(button)
+  assert.equal(f.publicMessages.length, 1)
+  f.message.createdTimestamp += 1000
+  f.respond(recognized(7))
+  await f.handle()
+  await towerStore.bind('guild', f.message.channelId, 28, 'admin')
+  const result = await f.click(publishId(f.privateMessages[1]))
+  assert.match(result.content, /設定已變更/)
+  assert.equal(f.publicMessages.length, 1)
+})
+
+test('published latest records reject older captures and preserve uncertainty markers', async () => {
+  const f = await fixture()
+  const binding = await f.binding()
+  const result = recognized()
+  assert.equal(result.kind, 'tower')
+  const old = observeTower(
+    { ...result.reading, clock: { time: '07:11', isUtc: true } },
+    Date.parse('2026-11-03T08:00:00Z'),
+    'old',
+    '100',
   )
-  assert.equal(f.deleted(), 0)
-  assert.match(f.replies.at(-1)?.content ?? '', /附件已變更/)
+  const fresh = observeTower(
+    { ...result.reading, clock: { time: '07:20', isUtc: true } },
+    Date.parse('2026-11-03T08:01:00Z'),
+    'fresh',
+    '101',
+  )
+  assert.equal(await towerStore.save(binding, fresh), true)
+  assert.equal(await towerStore.save(binding, old), false)
+  assert.deepEqual(await towerStore.list(binding), [fresh])
+  assert.match(renderTowerSummary(27, [fresh], 'zt'), /可能有誤差/)
 })
-
-test('uses each uploader’s cached Discord locale and Japanese for first-time users', async () => {
-  for (const [locale, expected] of [
-    [null, 'バフタワー'],
-    ['ja', 'バフタワー'],
-    ['zh-TW', '增益塔'],
-    ['en-US', 'Buff towers'],
-    ['ko', '버프 타워'],
-  ] as const) {
-    const f = await fixture(true, locale)
-    await f.handle()
-    assert.ok(f.replies[0].content.startsWith(expected))
-    assert.ok(f.replies[0].content.includes('UTC+9'))
-    assert.equal(f.deleted(), 1)
-  }
-  const failed = await fixture(true, 'en-GB')
-  failed.respond({ kind: 'unreadable' })
-  await failed.handle()
-  assert.match(failed.replies[0].content, /Could not parse/)
-  assert.equal(towerLanguage('zh-CN'), 'zt')
-  assert.equal(towerLanguage('fr'), 'ja')
-})
-
-test('remembers Discord locale from interactions and ignores older locale events', async () => {
-  const handlers = new Map<string, (event: unknown) => Promise<void>>()
-  startTowerFeature({
-    on: (name: string, handler: (event: unknown) => Promise<void>) =>
-      handlers.set(name, handler),
+test('a private slash command resumes a draft without requiring Manage Channels or publishing data', async () => {
+  const f = await fixture()
+  await f.handle()
+  let flags: number | undefined
+  let response: TestPayload | undefined
+  await towerCommand.execute({
+    inCachedGuild: () => true,
+    guildId: 'guild',
+    channelId: f.message.channelId,
+    locale: 'zh-TW',
+    user: f.message.author,
+    client: f.client,
+    member: {},
+    guild: { channels: { fetch: async () => f.channel }, members: { me: {} } },
+    options: { getSubcommand: () => 'draft' },
+    deferReply: async (payload: { flags: number }) => {
+      flags = payload.flags
+    },
+    editReply: async (payload: TestPayload) => {
+      response = payload
+    },
   } as never)
-  const onInteraction = handlers.get('interactionCreate')
-  assert.ok(onInteraction)
-  await onInteraction({
-    user: { id: 'locale-user' },
-    locale: 'ja',
-    createdTimestamp: 100,
-  })
-  await onInteraction({
-    user: { id: 'locale-user' },
+  assert.equal(flags, MessageFlags.Ephemeral)
+  assert.match(response?.content ?? '', /私人草稿/)
+  assert.equal(f.publicMessages.length, 0)
+})
+
+test('failed publication preserves the draft for retry without posting duplicate summaries', async () => {
+  const f = await fixture()
+  await f.handle()
+  const send = f.channel.send
+  f.channel.send = async () => {
+    throw new Error('Discord unavailable')
+  }
+  const failed = await f.click(publishId(f.privateMessages[0]))
+  assert.match(failed.content, /無法發布/)
+  assert.ok(await f.draft())
+  assert.equal(f.publicMessages.length, 0)
+  f.channel.send = send
+  await f.click(publishId(failed))
+  assert.equal(f.publicMessages.length, 1)
+  assert.equal(
+    await towerDraftStore.getForUser(await f.binding(), f.message.author.id),
+    null,
+  )
+})
+
+test('locale interaction caching remains active alongside private draft handlers', async () => {
+  const handlers = new Map<string, Array<(value: unknown) => unknown>>()
+  startTowerFeature({
+    on: (event: string, handler: (value: unknown) => unknown) => {
+      handlers.set(event, [...(handlers.get(event) ?? []), handler])
+    },
+  } as never)
+  const interaction = {
+    user: { id: 'locale-test' },
     locale: 'en-US',
-    createdTimestamp: 200,
+    createdTimestamp: 100,
+    isButton: () => false,
+    isStringSelectMenu: () => false,
+  }
+  await Promise.all(
+    (handlers.get('interactionCreate') ?? []).map((handler) =>
+      handler(interaction),
+    ),
+  )
+  assert.equal(await towerStore.getLocale('locale-test'), 'en-US')
+})
+
+test('legacy adoption uses an existing bot summary and persists its independent historical snapshot', async () => {
+  const f = await fixture()
+  const binding = await f.binding()
+  const item = observation()
+  await towerStore.save(binding, item)
+  const existing = await f.channel.send({
+    content: renderTowerSummary(27, [item], 'zt'),
   })
-  await onInteraction({
-    user: { id: 'locale-user' },
-    locale: 'ko',
-    createdTimestamp: 150,
-  })
-  assert.equal(await towerStore.getLocale('locale-user'), 'en-US')
-  assert.equal(await towerStore.getLocale('unknown-user'), null)
+  f.message.createdTimestamp += 60_000
+  await updateTowerSummary(
+    f.message as never,
+    { ...binding, adoptExistingSummary: true },
+    'zt',
+    [],
+  )
+  const period = await towerStore.getReportingPeriod(binding)
+  assert.ok(period)
+  assert.equal(period.messageId, existing.id)
+  assert.equal(f.publicMessages.length, 1)
+  assert.deepEqual(await towerStore.listPeriodObservations(binding, period), [
+    item,
+  ])
 })
 
 test('vision client sends image content, uses the optional model, and validates JSON responses', async () => {

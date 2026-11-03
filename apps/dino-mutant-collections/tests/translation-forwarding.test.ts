@@ -35,6 +35,7 @@ const { default: translateCommand } = await import(
   '../src/commands/translate.js'
 )
 const { closeDatabases } = await import('../src/database.js')
+const { towerStore } = await import('../src/towers/store.js')
 let counter = 0
 
 beforeEach(() => {
@@ -129,6 +130,8 @@ async function fixture(group = false) {
     )
   }
   return {
+    guildId: id,
+    sourceId,
     client,
     sent,
     targetIds,
@@ -140,6 +143,7 @@ async function fixture(group = false) {
       await onMessage({
         content,
         channelId: sourceId,
+        guildId: id,
         url: `https://discord.com/channels/${id}/${sourceId}/message`,
         inGuild: () => true,
         author: { bot, displayName: 'Author' },
@@ -154,6 +158,22 @@ async function fixture(group = false) {
     },
   }
 }
+
+test('never forwards private tower uploads into linked or grouped public translation channels', async () => {
+  const prior = process.env.TOWER_TRACKING_ENABLED
+  process.env.TOWER_TRACKING_ENABLED = 'true'
+  try {
+    for (const group of [false, true]) {
+      const f = await fixture(group)
+      await towerStore.bind(f.guildId, f.sourceId, 27, 'author')
+      await f.forward('https://example.com/private-caption', [attachment()])
+      assert.equal(f.sent.length, 0)
+    }
+  } finally {
+    if (prior === undefined) delete process.env.TOWER_TRACKING_ENABLED
+    else process.env.TOWER_TRACKING_ENABLED = prior
+  }
+})
 
 test('forwards link-only and attachment-only messages in links and groups without AI', async () => {
   for (const group of [false, true]) {

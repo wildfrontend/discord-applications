@@ -7,6 +7,7 @@ import {
   MessageFlags,
   type TextBasedChannel,
 } from 'discord.js'
+import { towerStore } from '../towers/store.js'
 import { aiTranslationClient } from './ai-client.js'
 import {
   originalButtonPrefix,
@@ -124,6 +125,14 @@ export function startTranslationFeature(
       ) {
         return
       }
+
+      // Tower uploads are staged privately; never forward their images or
+      // captions into public translation channels before publication.
+      if (
+        process.env.TOWER_TRACKING_ENABLED === 'true' &&
+        (await towerStore.getBinding(message.guildId, message.channelId))
+      )
+        return
 
       const groupMember = await translationGroupStore.getMember(
         message.channelId,

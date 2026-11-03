@@ -1,7 +1,10 @@
 import { type Client, Events, type Message } from 'discord.js'
 import { type TowerImageClient, towerImageClient } from './ai-client.js'
+import { deliverTowerDraft, startTowerDraftInteractions } from './draft-flow.js'
+import { type DraftNotice, towerDraftStore } from './drafts.js'
 import { type TowerTextKey, towerLanguage, towerText } from './i18n.js'
-import { observeTower, renderTowerSummary } from './service.js'
+import { withTowerChannelLock } from './queue.js'
+import { observeTower, type TowerObservation } from './service.js'
 import { towerStore } from './store.js'
 
 const maxImageBytes = 20 * 1024 * 1024
@@ -38,7 +41,7 @@ export async function handleTowerMessage(
     values: Record<string, string | number> = {},
   ) => towerText(language, key, values)
 
-  let updated = false
+  const observations: TowerObservation[] = []
   let unreadable = 0
   let failed = 0
   let unsupported = 0
@@ -74,16 +77,14 @@ export async function handleTowerMessage(
         wrongServer++
         continue
       }
-      updated =
-        (await towerStore.save(
-          binding,
-          observeTower(
-            result.reading,
-            message.createdTimestamp,
-            message.id,
-            image.id,
-          ),
-        )) || updated
+      observations.push(
+        observeTower(
+          result.reading,
+          message.createdTimestamp,
+          message.id,
+          image.id,
+        ),
+      )
     } catch {
       failed++
       console.warn(
@@ -97,37 +98,25 @@ export async function handleTowerMessage(
     binding.id
   )
     return
-  const notices = [
-    wrongServer > 0
-      ? text('wrongServer', {
-          count: wrongServer,
-          server: binding.serverNumber,
-        })
-      : '',
-    unreadable > 0 ? text('unreadable', { count: unreadable }) : '',
-    unsupported > 0 ? text('unsupported', { count: unsupported }) : '',
-    failed > 0 ? text('failed', { count: failed }) : '',
-  ].filter(Boolean)
-  const content =
-    [
-      updated
-        ? renderTowerSummary(
-            binding.serverNumber,
-            await towerStore.list(binding),
-            language,
-          )
-        : '',
-      ...notices,
-    ]
-      .filter(Boolean)
-      .join('\n\n') || text('noUpdate')
-
-  // Send plain text without replying to or embedding the image message.
-  // If posting the result fails, retain the source so the upload is not lost silently.
-  const resultMessage = await message.channel.send({
-    content,
-    allowedMentions: { parse: [], repliedUser: false },
-  })
+  const notices: DraftNotice[] = []
+  if (wrongServer) notices.push({ key: 'wrongServer', count: wrongServer })
+  if (unreadable) notices.push({ key: 'unreadable', count: unreadable })
+  if (unsupported) notices.push({ key: 'unsupported', count: unsupported })
+  if (failed) notices.push({ key: 'failed', count: failed })
+  // Recognition stages private data only. Public records change on explicit publication.
+  const draft = await towerDraftStore.stage(
+    binding,
+    message.author.id,
+    message.createdTimestamp,
+    observations,
+    notices,
+  )
+  const { message: resultMessage, content } = await deliverTowerDraft(
+    message,
+    binding,
+    draft,
+    language,
+  )
 
   let cleanupNotice: TowerTextKey | undefined
   try {
@@ -168,6 +157,7 @@ export async function handleTowerMessage(
 }
 
 export function startTowerFeature(client: Client): void {
+  startTowerDraftInteractions(client)
   client.on(Events.InteractionCreate, async (interaction) => {
     // MessageCreate has no locale. Remember Discord's locale from real interactions.
     await towerStore
@@ -180,7 +170,6 @@ export function startTowerFeature(client: Client): void {
         console.warn('[towers] Unable to remember user locale')
       })
   })
-  const queues = new Map<string, Promise<void>>()
   client.on(Events.MessageCreate, (message) => {
     if (
       !message.inGuild() ||
@@ -189,18 +178,12 @@ export function startTowerFeature(client: Client): void {
       message.attachments.size === 0
     )
       return
-    const previous = queues.get(message.channelId) ?? Promise.resolve()
-    const work = previous
-      .then(() => handleTowerMessage(message))
-      .catch(() => {
-        console.warn(
-          `[towers] Unable to process message in channel ${message.channelId}`,
-        )
-      })
-    queues.set(message.channelId, work)
-    void work.then(() => {
-      if (queues.get(message.channelId) === work)
-        queues.delete(message.channelId)
+    void withTowerChannelLock(message.channelId, () =>
+      handleTowerMessage(message),
+    ).catch(() => {
+      console.warn(
+        `[towers] Unable to process message in channel ${message.channelId}`,
+      )
     })
   })
 }

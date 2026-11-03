@@ -5,6 +5,8 @@ import {
   PermissionFlagsBits,
   SlashCommandBuilder,
 } from 'discord.js'
+import { towerDraftPreview } from '../towers/draft-flow.js'
+import { towerDraftStore } from '../towers/drafts.js'
 import { type TowerTextKey, towerLanguage, towerText } from '../towers/i18n.js'
 import { renderTowerSummary } from '../towers/service.js'
 import { towerStore } from '../towers/store.js'
@@ -88,6 +90,19 @@ export default defineCommand({
     )
     .addSubcommand((subcommand) =>
       subcommand
+        .setName('draft')
+        .setNameLocalizations({ 'zh-TW': '草稿', ja: '下書き', ko: '초안' })
+        .setDescription(
+          'Privately preview your pending tower images and choose where to publish',
+        )
+        .setDescriptionLocalizations({
+          'zh-TW': '私人查看待發布的塔圖片資料，選擇發布期別',
+          ja: '非公開の下書きを確認して公開先を選択',
+          ko: '비공개 초안을 확인하고 게시할 기간을 선택합니다',
+        }),
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
         .setName('disable')
         .setNameLocalizations({ 'zh-TW': '停用', ja: '停止', ko: '중지' })
         .setDescription(
@@ -129,7 +144,7 @@ export default defineCommand({
       return
     }
     if (
-      action !== 'list' &&
+      ['setup', 'disable'].includes(action) &&
       !channel
         .permissionsFor(interaction.member)
         ?.has(PermissionFlagsBits.ManageChannels)
@@ -158,9 +173,31 @@ export default defineCommand({
       })
       return
     }
-    await interaction.deferReply(
-      action === 'list' ? {} : { flags: MessageFlags.Ephemeral },
-    )
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral })
+    if (action === 'draft') {
+      const binding = await towerStore.getBinding(
+        interaction.guildId,
+        channel.id,
+      )
+      const draft = binding
+        ? await towerDraftStore.getForUser(binding, interaction.user.id)
+        : null
+      await interaction.editReply(
+        binding && draft
+          ? await towerDraftPreview(
+              {
+                channel,
+                client: { user: { id: interaction.client.user.id } },
+                createdTimestamp: draft.updatedAt,
+              },
+              binding,
+              draft,
+              language,
+            )
+          : { content: text('noDraft'), components: [] },
+      )
+      return
+    }
     if (action === 'setup') {
       const serverNumber = interaction.options.getInteger('server', true)
       await towerStore.bind(
@@ -196,12 +233,19 @@ export default defineCommand({
       return
     }
     const binding = await towerStore.getBinding(interaction.guildId, channel.id)
+    const period = binding ? await towerStore.getReportingPeriod(binding) : null
+    const observations = binding
+      ? period
+        ? await towerStore.listPeriodObservations(binding, period)
+        : await towerStore.list(binding)
+      : []
     await interaction.editReply({
       content: binding
         ? renderTowerSummary(
             binding.serverNumber,
-            await towerStore.list(binding),
+            observations,
             language,
+            period ?? undefined,
           )
         : text('notConfigured'),
       allowedMentions: { parse: [] },

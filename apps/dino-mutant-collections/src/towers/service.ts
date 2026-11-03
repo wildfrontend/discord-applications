@@ -6,6 +6,12 @@ export const towerAreas = [7, 8, 9, 12, 14, 17, 18, 19] as const
 export type TowerArea = (typeof towerAreas)[number]
 export const maximumShieldSeconds = 48 * 60 * 60
 export const clockDelayWarningMs = 30 * 60 * 1000
+export const towerReportingPeriodMs = 48 * 60 * 60 * 1000
+
+export interface TowerPeriodWindow {
+  startedAt: number
+  endsAt: number
+}
 
 export type TowerTimeBasis = 'upload' | 'utc-clock' | 'minute-estimate'
 
@@ -181,6 +187,7 @@ export function renderTowerSummary(
   serverNumber: number,
   observations: readonly TowerObservation[],
   language: TranslationLanguage = 'ja',
+  period?: TowerPeriodWindow,
 ): string {
   const byArea = new Map(
     observations
@@ -189,6 +196,12 @@ export function renderTowerSummary(
   )
   return [
     towerText(language, 'title'),
+    period
+      ? towerText(language, 'period', {
+          start: formatJapaneseTime(period.startedAt),
+          end: formatJapaneseTime(period.endsAt),
+        })
+      : '',
     ...towerAreas.map((area) => {
       const item = byArea.get(area)
       if (!item)
@@ -202,7 +215,11 @@ export function renderTowerSummary(
       const warning = item.timeUncertain
         ? `｜${towerText(language, item.timeBasis === 'utc-clock' && item.uploadedAt - item.observedAt > clockDelayWarningMs ? 'timeOld' : 'timeUncertain')}`
         : ''
-      return `- ${serverNumber}-${area} ${escapeMarkdown(item.occupyingTribe)} ${formatJapaneseTime(item.availableAt)}（<t:${Math.floor(item.availableAt / 1000)}:R>｜${towerText(language, basis)}${warning}）`
+      const previous =
+        period && item.uploadedAt < period.startedAt
+          ? `｜${towerText(language, 'previousReport')}`
+          : ''
+      return `- ${serverNumber}-${area} ${escapeMarkdown(item.occupyingTribe)} ${formatJapaneseTime(item.availableAt)}（<t:${Math.floor(item.availableAt / 1000)}:R>｜${towerText(language, basis)}${warning}${previous}）`
     }),
     towerText(language, 'estimate'),
     [...byArea.values()].some((item) => item.timeBasis === 'minute-estimate')
