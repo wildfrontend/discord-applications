@@ -21,9 +21,11 @@ const dataDirectory = mkdtempSync(join(tmpdir(), 'dc-translation-forwarding-'))
 process.env.BOT_DATA_DIR = dataDirectory
 process.env.DATABASE_DRIVER = 'sqlite'
 process.env.AI_API_KEY = 'test-only'
+process.env.AI_MIN_REQUEST_INTERVAL_MS = '0'
 delete process.env.DATABASE_URL
 
 const { aiTranslationClient } = await import('../src/translation/ai-client.js')
+const originalTranslateMany = aiTranslationClient.translateMany
 const { startTranslationFeature } = await import(
   '../src/translation/feature.js'
 )
@@ -141,6 +143,7 @@ async function fixture(group = false) {
     },
     async forward(content: string, files: Attachment[] = [], bot = false) {
       await onMessage({
+        id: `${id}-message`,
         content,
         channelId: sourceId,
         guildId: id,
@@ -231,6 +234,83 @@ test('translates text while forwarding all images and files unchanged to every t
       attachment('document.pdf').url,
     )
   }
+})
+
+test('recovers an API failure and delivers the source message once to every target', async () => {
+  const f = await fixture(true)
+  mock.method(aiTranslationClient, 'translateMany', originalTranslateMany)
+  mock.method(console, 'warn', () => {})
+  let attempts = 0
+  mock.method(globalThis, 'fetch', async () => {
+    if (++attempts === 1) return new Response('', { status: 503 })
+    return Response.json({
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            content: JSON.stringify({
+              translations: { en: 'Hello', ja: 'こんにちは' },
+              detectedLanguage: 'zt',
+            }),
+          },
+        },
+      ],
+    })
+  })
+  await f.forward('你好', [attachment()])
+  assert.equal(attempts, 2)
+  assert.equal(f.sent.length, 2)
+  assert.deepEqual(
+    f.sent.map((entry) => entry.channelId).sort(),
+    [...f.targetIds].sort(),
+  )
+  assert.ok(f.sent.every((entry) => entry.payload.files?.length === 1))
+})
+
+test('logs every failed message instead of suppressing errors for one minute', async () => {
+  const f = await fixture()
+  const errors = mock.method(console, 'error', () => {})
+  await f.forward('第一則訊息')
+  await f.forward('第二則訊息')
+  assert.equal(errors.mock.callCount(), 2)
+  assert.ok(
+    errors.mock.calls.every((call) =>
+      String(call.arguments[0]).includes(`source=${f.sourceId}`),
+    ),
+  )
+})
+
+test('catches configuration lookup failures and continues processing later messages', async () => {
+  const f = await fixture()
+  const errors = mock.method(console, 'error', () => {})
+  const lookup = mock.method(translationGroupStore, 'getMember', async () => {
+    throw new Error('Database temporarily unavailable')
+  })
+  await assert.doesNotReject(f.forward('https://example.com/first'))
+  assert.equal(errors.mock.callCount(), 1)
+  assert.equal(f.sent.length, 0)
+  lookup.mock.restore()
+  await f.forward('https://example.com/second')
+  assert.equal(f.sent.length, 1)
+})
+
+test('isolates target delivery failures and logs the failed destination', async () => {
+  const f = await fixture(true)
+  mock.method(console, 'warn', () => {})
+  const errors = mock.method(console, 'error', () => {})
+  f.failAt(1)
+  assert.ok(f.channel)
+  mock.method(f.channel, 'send', async () => {
+    throw new Error('Cannot send')
+  })
+  await f.forward('https://example.com/message')
+  assert.equal(f.sent.length, 1)
+  assert.equal(f.sent[0].channelId, f.targetIds[1])
+  assert.equal(errors.mock.callCount(), 1)
+  assert.match(
+    String(errors.mock.calls[0].arguments[0]),
+    new RegExp(`target=${f.targetIds[0]}`),
+  )
 })
 
 test('splits long translations without losing text or repeating attachments', async () => {

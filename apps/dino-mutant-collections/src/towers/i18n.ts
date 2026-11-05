@@ -1,6 +1,12 @@
 import type { TranslationLanguage } from '../translation/languages.js'
 
 const japanese = {
+  uploadImages: '画像をアップロード',
+  uploadTitle: '非公開のタワー画像アップロード',
+  uploadDescription:
+    'PNG・JPEG・WebPを1〜10枚、各20 MB以下。確認して公開するまでチャンネルには表示されません。',
+  uploadFailed:
+    'アップロードを処理できませんでした。再試行するか /tower draft で保存済みの下書きを確認してください。',
   title: 'バフタワー｜日本時間 (UTC+9)｜占領可能時刻の目安',
   empty: '（未報告）',
   draftNewEarly:
@@ -14,7 +20,8 @@ const japanese = {
   cancelDraft: '下書きを破棄',
   draftAdvice:
     '推奨：{target}。公開先を選び、プレビューを確認してから「公開する」を押してください。',
-  noDraft: '下書きはありません。このチャンネルにタワー画像を投稿してください。',
+  noDraft:
+    '下書きはありません。「画像をアップロード」または /tower upload で非公開のアップロード画面を開いてください。',
   draftOwner: 'この下書きは別のユーザーのものです。',
   draftGone:
     '下書きは公開済み、破棄済み、またはチャンネル設定が変更されています。',
@@ -62,7 +69,7 @@ const japanese = {
   botPermissions:
     'Bot に「チャンネルを見る」「メッセージを送信」「メッセージ履歴を読む」権限が必要です。',
   setup:
-    '<#{channel}> を {server} サーバー専用に設定しました。対象：7・8・9・12・14・17・18・19 区。\n占領可能時刻＝画像から推定した撮影時刻（不明なら投稿時刻）＋シールド残り時間。表示は日本時間 UTC+9。画像はDMの下書きで確認し、公開を選ぶまで総表に反映しません。画像付きの投稿は処理後に削除します。サーバーを変更すると、このチャンネルの記録を消去します。',
+    '<#{channel}> を {server} サーバー専用に設定しました。対象：7・8・9・12・14・17・18・19 区。\n占領可能時刻＝画像から推定した撮影時刻（不明なら投稿時刻）＋シールド残り時間。表示は日本時間 UTC+9。/tower upload または「画像をアップロード」で非公開のアップロード画面を開いてください。確認して公開するまで総表に反映しません。サーバーを変更すると、このチャンネルの記録を消去します。',
   trackingDisabled:
     '画像検出は未有効です。TOWER_TRACKING_ENABLED=true と Discord Message Content Intent を有効にして Bot を再起動してください。',
   aiMissing: 'AI_API_KEY が未設定です。設定後に Bot を再起動してください。',
@@ -75,6 +82,12 @@ export type TowerTextKey = keyof typeof japanese
 const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
   ja: japanese,
   zt: {
+    uploadImages: '上傳圖片',
+    uploadTitle: '增益塔私人圖片上傳',
+    uploadDescription:
+      '每次 1–10 張 PNG、JPEG 或 WebP，每張上限 20 MB；確認發布前不會顯示在頻道。',
+    uploadFailed:
+      '圖片上傳處理失敗，請重試；已保存的草稿可使用 /tower draft 查看。',
     title: '增益塔｜日本時間 (UTC+9)｜預估可佔領時間',
     empty: '（留空）',
     draftNewEarly: '目前仍在本期範圍內；確認另開新期會結束本期，保留原總表。',
@@ -87,7 +100,8 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     cancelDraft: '取消草稿',
     draftAdvice:
       '建議：{target}。先選擇期別並確認預覽，按「確認發布」才會公開。',
-    noDraft: '目前沒有待發布的草稿，請在此頻道上傳增益塔圖片。',
+    noDraft:
+      '目前沒有待發布的草稿。請按「上傳圖片」或使用 /tower upload，開啟私人上傳視窗。',
     draftOwner: '這份草稿屬於其他使用者。',
     draftGone: '草稿已發布、取消，或頻道設定已變更。',
     draftStale: '有新圖片加入，草稿已更新；請確認最新預覽後再發布。',
@@ -125,7 +139,7 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     botPermissions:
       'Bot 需要該頻道的「檢視頻道」、「傳送訊息」與「讀取訊息歷史」權限。',
     setup:
-      '已設定 <#{channel}> 只記錄 {server} 服的 7、8、9、12、14、17、18、19 區。\n可佔領時間＝圖片推定截圖時間（無法判斷時用上傳時間）＋護盾倒數，統一顯示日本時間 UTC+9。圖片會先以私訊提供草稿，確認發布後才會更新總表；原圖處理後刪除。切換伺服器會清除該頻道的原有紀錄。',
+      '已設定 <#{channel}> 只記錄 {server} 服的 7、8、9、12、14、17、18、19 區。\n可佔領時間＝圖片推定截圖時間（無法判斷時用上傳時間）＋護盾倒數，統一顯示日本時間 UTC+9。使用 /tower upload 或「上傳圖片」開啟私人上傳視窗，確認預覽並發布後才更新頻道總表。切換伺服器會清除該頻道的原有紀錄。',
     trackingDisabled:
       '尚未啟用圖片偵測：請設定 TOWER_TRACKING_ENABLED=true，啟用 Discord Message Content Intent 並重啟 Bot。',
     aiMissing: '尚未設定 AI_API_KEY；設定後重啟 Bot 才能辨識圖片。',
@@ -134,6 +148,12 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
       '此頻道尚未設定增益塔追蹤，請管理員使用 /tower setup server:27。',
   },
   en: {
+    uploadImages: 'Upload images',
+    uploadTitle: 'Private tower screenshot upload',
+    uploadDescription:
+      '1–10 PNG, JPEG or WebP images, up to 20 MB each. Posted only after confirmation.',
+    uploadFailed:
+      'Could not process the upload. Try again, or use /tower draft to review any saved draft.',
     title: 'Buff towers | Japan time (UTC+9) | Estimated capture time',
     empty: '(Not reported)',
     draftNewEarly:
@@ -148,7 +168,7 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     draftAdvice:
       'Suggested: {target}. Choose a period and review the preview before pressing Publish.',
     noDraft:
-      'You have no pending draft. Upload tower screenshots in this channel.',
+      'You have no pending draft. Press Upload images or use /tower upload to open a private upload window.',
     draftOwner: 'This draft belongs to another user.',
     draftGone:
       'This draft was published, discarded, or its channel configuration changed.',
@@ -195,7 +215,7 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     botPermissions:
       'The bot needs View Channel, Send Messages, and Read Message History permissions.',
     setup:
-      '<#{channel}> now tracks server {server}, areas 7, 8, 9, 12, 14, 17, 18, and 19.\nCapture time = estimated screenshot time (or upload time when unknown) + shield countdown, displayed in Japan time (UTC+9). Images are previewed in private DMs; records update only after publication. Source images are deleted after processing. Switching servers clears this channel’s records.',
+      '<#{channel}> now tracks server {server}, areas 7, 8, 9, 12, 14, 17, 18, and 19.\nCapture time = estimated screenshot time (or upload time when unknown) + shield countdown, displayed in Japan time (UTC+9). Use /tower upload or Upload images for a private upload window. Review the private preview and confirm publication to update the channel summary. Switching servers clears this channel’s records.',
     trackingDisabled:
       'Image detection is disabled. Set TOWER_TRACKING_ENABLED=true, enable Discord Message Content Intent, and restart the bot.',
     aiMissing:
@@ -205,6 +225,12 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
       'Tracking is not configured. Ask an administrator to run /tower setup server:27.',
   },
   ko: {
+    uploadImages: '이미지 업로드',
+    uploadTitle: '비공개 타워 이미지 업로드',
+    uploadDescription:
+      'PNG, JPEG, WebP 1~10장, 각 20 MB 이하. 게시를 확인하기 전에는 채널에 표시되지 않습니다.',
+    uploadFailed:
+      '업로드를 처리하지 못했습니다. 다시 시도하거나 /tower draft로 저장된 초안을 확인해 주세요.',
     title: '버프 타워｜일본 시간 (UTC+9)｜예상 점령 가능 시각',
     empty: '（미보고）',
     draftNewEarly:
@@ -218,7 +244,8 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     cancelDraft: '초안 취소',
     draftAdvice:
       '추천: {target}. 기간을 선택하고 미리보기를 확인한 후 게시해 주세요.',
-    noDraft: '대기 중인 초안이 없습니다. 이 채널에 타워 이미지를 올려 주세요.',
+    noDraft:
+      '대기 중인 초안이 없습니다. 이미지 업로드 버튼이나 /tower upload로 비공개 업로드 창을 열어 주세요.',
     draftOwner: '다른 사용자의 초안입니다.',
     draftGone: '초안이 게시 또는 취소되었거나 채널 설정이 변경되었습니다.',
     draftStale:
@@ -262,7 +289,7 @@ const messages: Record<TranslationLanguage, Record<TowerTextKey, string>> = {
     botPermissions:
       '봇에 채널 보기, 메시지 보내기, 메시지 기록 보기 권한이 필요합니다.',
     setup:
-      '<#{channel}>에서 {server} 서버의 7, 8, 9, 12, 14, 17, 18, 19구역을 기록합니다.\n점령 가능 시각＝이미지에서 추정한 촬영 시각(알 수 없으면 업로드 시각)＋보호막 남은 시간. 일본 시간 UTC+9로 표시합니다. 이미지는 개인 메시지 초안으로 확인하고 게시한 후에만 기록을 변경합니다. 원본 이미지는 처리 후 삭제합니다. 서버를 변경하면 이 채널의 기록이 지워집니다.',
+      '<#{channel}>에서 {server} 서버의 7, 8, 9, 12, 14, 17, 18, 19구역을 기록합니다.\n점령 가능 시각＝이미지에서 추정한 촬영 시각(알 수 없으면 업로드 시각)＋보호막 남은 시간. 일본 시간 UTC+9로 표시합니다. /tower upload 또는 이미지 업로드 버튼으로 비공개 업로드 창을 열어 주세요. 미리보기를 확인하고 게시한 후에만 채널 총표를 변경합니다. 서버를 변경하면 이 채널의 기록이 지워집니다.',
     trackingDisabled:
       '이미지 감지가 꺼져 있습니다. TOWER_TRACKING_ENABLED=true와 Discord Message Content Intent를 활성화한 후 봇을 다시 시작해 주세요.',
     aiMissing:

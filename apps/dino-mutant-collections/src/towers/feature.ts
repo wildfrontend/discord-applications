@@ -1,13 +1,11 @@
 import { type Client, Events, type Message } from 'discord.js'
 import { type TowerImageClient, towerImageClient } from './ai-client.js'
 import { deliverTowerDraft, startTowerDraftInteractions } from './draft-flow.js'
-import { type DraftNotice, towerDraftStore } from './drafts.js'
 import { type TowerTextKey, towerLanguage, towerText } from './i18n.js'
+import { stageTowerImages } from './ingestion.js'
 import { withTowerChannelLock } from './queue.js'
-import { observeTower, type TowerObservation } from './service.js'
 import { towerStore } from './store.js'
-
-const maxImageBytes = 20 * 1024 * 1024
+import { startTowerUploadInteractions } from './upload-flow.js'
 
 function isUnknownMessage(error: unknown): boolean {
   return (
@@ -41,76 +39,15 @@ export async function handleTowerMessage(
     values: Record<string, string | number> = {},
   ) => towerText(language, key, values)
 
-  const observations: TowerObservation[] = []
-  let unreadable = 0
-  let failed = 0
-  let unsupported = 0
-  let wrongServer = 0
-  for (const image of images.values()) {
-    let url: URL
-    try {
-      url = new URL(image.url)
-    } catch {
-      unsupported++
-      continue
-    }
-    if (
-      image.size > maxImageBytes ||
-      !(image.contentType
-        ? /^image\/(?:png|jpeg|webp)$/i.test(image.contentType)
-        : /\.(?:png|jpe?g|webp)$/i.test(image.name)) ||
-      url.protocol !== 'https:' ||
-      url.username ||
-      url.password ||
-      !['cdn.discordapp.com', 'media.discordapp.net'].includes(url.hostname)
-    ) {
-      unsupported++
-      continue
-    }
-    try {
-      const result = await imageClient.recognize(image.url)
-      if (result.kind !== 'tower') {
-        unreadable++
-        continue
-      }
-      if (result.reading.serverNumber !== binding.serverNumber) {
-        wrongServer++
-        continue
-      }
-      observations.push(
-        observeTower(
-          result.reading,
-          message.createdTimestamp,
-          message.id,
-          image.id,
-        ),
-      )
-    } catch {
-      failed++
-      console.warn(
-        `[towers] Image processing failed in channel ${message.channelId}`,
-      )
-    }
-  }
-
-  if (
-    (await towerStore.getBinding(message.guildId, message.channelId))?.id !==
-    binding.id
-  )
-    return
-  const notices: DraftNotice[] = []
-  if (wrongServer) notices.push({ key: 'wrongServer', count: wrongServer })
-  if (unreadable) notices.push({ key: 'unreadable', count: unreadable })
-  if (unsupported) notices.push({ key: 'unsupported', count: unsupported })
-  if (failed) notices.push({ key: 'failed', count: failed })
-  // Recognition stages private data only. Public records change on explicit publication.
-  const draft = await towerDraftStore.stage(
+  const draft = await stageTowerImages(
     binding,
     message.author.id,
     message.createdTimestamp,
-    observations,
-    notices,
+    message.id,
+    images.values(),
+    imageClient,
   )
+  if (!draft) return
   const { message: resultMessage, content } = await deliverTowerDraft(
     message,
     binding,
@@ -158,6 +95,7 @@ export async function handleTowerMessage(
 
 export function startTowerFeature(client: Client): void {
   startTowerDraftInteractions(client)
+  startTowerUploadInteractions(client)
   client.on(Events.InteractionCreate, async (interaction) => {
     // MessageCreate has no locale. Remember Discord's locale from real interactions.
     await towerStore

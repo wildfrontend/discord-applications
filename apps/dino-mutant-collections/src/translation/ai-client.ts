@@ -1,4 +1,8 @@
-import { enqueueAiRequest } from '../ai/request-queue.js'
+import {
+  RetryableAiError,
+  requestAiWithRetry,
+  retryAfterMs,
+} from '../ai/retry.js'
 import type {
   BatchTranslationClient,
   BatchTranslationResult,
@@ -35,9 +39,10 @@ const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`
 const providerName =
   process.env.AI_PROVIDER_NAME?.trim() || inferProviderName(baseUrl)
 const configuredMaxOutputTokens = Number(process.env.AI_MAX_OUTPUT_TOKENS)
-const maxOutputTokens = Number.isInteger(configuredMaxOutputTokens)
-  ? Math.min(8_192, Math.max(1, configuredMaxOutputTokens))
-  : 900
+const maxOutputTokens =
+  Number.isInteger(configuredMaxOutputTokens) && configuredMaxOutputTokens > 0
+    ? Math.min(8_192, Math.max(1, configuredMaxOutputTokens))
+    : 8_192
 
 const translationInstruction = `You are a translation engine for Discord messages.
 Translate faithfully and completely without summarizing, answering, explaining, censoring, or adding information.
@@ -77,14 +82,18 @@ async function generateJson<T>(
   prompt: object,
   schemaName: string,
   schema: object,
+  parse: (value: unknown) => T,
+  initialOutputTokens = 900,
 ): Promise<T> {
-  return enqueueAiRequest(async () => {
+  const key = apiKey()
+  let outputTokens = Math.min(initialOutputTokens, maxOutputTokens)
+  return requestAiWithRetry(async () => {
     let response: Response
     try {
       response = await fetch(endpoint, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${apiKey()}`,
+          Authorization: `Bearer ${key}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -95,7 +104,7 @@ async function generateJson<T>(
               content: `${translationInstruction}\n\n${JSON.stringify(prompt)}`,
             },
           ],
-          max_tokens: maxOutputTokens,
+          max_tokens: outputTokens,
           response_format: {
             type: 'json_schema',
             json_schema: {
@@ -109,31 +118,79 @@ async function generateJson<T>(
       })
     } catch (error) {
       const details = error instanceof Error ? error.message : String(error)
-      throw new Error(`無法連線到 AI 翻譯服務（${providerName}）：${details}`)
+      throw new RetryableAiError(
+        `無法連線到 AI 翻譯服務（${providerName}）：${details}`,
+      )
     }
 
-    const body = (await response.json().catch(() => null)) as AiResponse | null
+    let body: AiResponse | null
+    try {
+      body = (await response.json()) as AiResponse | null
+    } catch {
+      body = null
+    }
     if (!response.ok) {
-      const message =
-        body?.error?.message ||
-        `AI 翻譯服務（${providerName}）回傳 HTTP ${response.status}`
-      throw new Error(`${message}${quotaDetails(response)}`)
+      const message = `AI 翻譯服務（${providerName}）回傳 HTTP ${response.status}${quotaDetails(response)}`
+      if ([408, 409, 429].includes(response.status) || response.status >= 500) {
+        throw new RetryableAiError(
+          message,
+          retryAfterMs(response.headers.get('retry-after')),
+        )
+      }
+      throw new Error(message)
     }
 
+    if (!body) {
+      throw new RetryableAiError(
+        `AI 翻譯服務（${providerName}）回傳了無效的回應。`,
+      )
+    }
     const choice = body?.choices?.[0]
-    const output = choice?.message?.content?.trim()
+    if (choice?.finish_reason === 'length') {
+      const message = `AI 翻譯服務（${providerName}）輸出額度不足，譯文未完成。`
+      if (outputTokens >= maxOutputTokens) throw new Error(message)
+      outputTokens = Math.min(maxOutputTokens, outputTokens * 2)
+      throw new RetryableAiError(message)
+    }
+    if (
+      choice?.message?.refusal ||
+      (choice?.finish_reason && choice.finish_reason !== 'stop')
+    ) {
+      throw new Error(
+        `AI 翻譯失敗（${providerName}）：${choice.finish_reason ?? 'refusal'}`,
+      )
+    }
+    const output =
+      typeof choice?.message?.content === 'string'
+        ? choice.message.content.trim()
+        : ''
     if (!output) {
       const reason =
         choice?.message?.refusal || choice?.finish_reason || '沒有輸出內容'
-      throw new Error(`AI 翻譯失敗（${providerName}）：${reason}`)
+      throw new RetryableAiError(`AI 翻譯失敗（${providerName}）：${reason}`)
     }
 
+    let parsed: unknown
     try {
-      return JSON.parse(output) as T
+      parsed = JSON.parse(output)
     } catch {
-      throw new Error(`AI 翻譯服務（${providerName}）回傳了無效的 JSON。`)
+      throw new RetryableAiError(
+        `AI 翻譯服務（${providerName}）回傳了無效的 JSON。`,
+      )
     }
+    return parse(parsed)
   })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isDetectedLanguage(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    (value === 'unknown' || normalizeDetectedLanguage(value) !== null)
+  )
 }
 
 function normalizedLanguage(value: string): TranslationLanguage | null {
@@ -185,15 +242,30 @@ async function translateMany(
       required: ['translations', 'detectedLanguage'],
       additionalProperties: false,
     },
+    (value): AiBatchTranslation => {
+      if (
+        !isRecord(value) ||
+        !isRecord(value.translations) ||
+        !isDetectedLanguage(value.detectedLanguage)
+      ) {
+        throw new RetryableAiError(
+          `AI 翻譯服務（${providerName}）回傳的翻譯格式無效。`,
+        )
+      }
+      const translations: AiBatchTranslation['translations'] = {}
+      for (const target of uniqueTargets) {
+        const text = value.translations[target]
+        if (typeof text !== 'string' || !text.trim()) {
+          throw new RetryableAiError(
+            `AI 翻譯服務（${providerName}）沒有回傳${languageNames[target]}譯文。`,
+          )
+        }
+        translations[target] = text
+      }
+      return { translations, detectedLanguage: value.detectedLanguage }
+    },
+    Math.max(900, 256 + text.length * uniqueTargets.length * 2),
   )
-
-  for (const target of uniqueTargets) {
-    if (!result.translations[target]?.trim()) {
-      throw new Error(
-        `AI 翻譯服務（${providerName}）沒有回傳${languageNames[target]}譯文。`,
-      )
-    }
-  }
   return {
     translations: result.translations,
     detectedLanguage:
@@ -224,6 +296,14 @@ export const aiTranslationClient: BatchTranslationClient = {
         },
         required: ['language'],
         additionalProperties: false,
+      },
+      (value): AiDetection => {
+        if (!isRecord(value) || !isDetectedLanguage(value.language)) {
+          throw new RetryableAiError(
+            `AI 翻譯服務（${providerName}）回傳的語言偵測格式無效。`,
+          )
+        }
+        return { language: value.language }
       },
     )
     return {

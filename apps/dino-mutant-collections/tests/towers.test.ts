@@ -23,6 +23,7 @@ const dataDirectory = mkdtempSync(join(tmpdir(), 'dc-towers-'))
 process.env.BOT_DATA_DIR = dataDirectory
 process.env.DATABASE_DRIVER = 'sqlite'
 process.env.AI_MIN_REQUEST_INTERVAL_MS = '0'
+process.env.TOWER_TRACKING_ENABLED = 'true'
 delete process.env.DATABASE_URL
 const legacy = new DatabaseSync(join(dataDirectory, 'towers.sqlite'))
 legacy.exec(`CREATE TABLE tower_observations (
@@ -61,6 +62,10 @@ const { handleTowerDraftInteraction } = await import(
   '../src/towers/draft-flow.js'
 )
 const { updateTowerSummary } = await import('../src/towers/summary.js')
+const { handleTowerUploadInteraction } = await import(
+  '../src/towers/upload-flow.js'
+)
+const { towerUploadModal } = await import('../src/towers/upload-ui.js')
 const { default: towerCommand } = await import('../src/commands/tower.js')
 const { closeDatabases } = await import('../src/database.js')
 
@@ -351,7 +356,7 @@ async function fixture(bound = true, locale: string | null = 'zh-TW') {
   const channel = {
     id: channelId,
     type: ChannelType.GuildText,
-    guild: { members: { fetch: async (id: string) => ({ id }) } },
+    guild: { id: 'guild', members: { fetch: async (id: string) => ({ id }) } },
     permissionsFor: () => ({ has: () => canPost }),
     messages: {
       fetch: async (options: { message?: string; limit?: number }) => {
@@ -441,6 +446,7 @@ async function fixture(bound = true, locale: string | null = 'zh-TW') {
     client,
     channel,
     attachment,
+    imageClient,
     publicMessages,
     privateMessages,
     posted,
@@ -472,6 +478,245 @@ function targetId(payload: TestPayload): string {
   }
   return row.components[0].custom_id
 }
+
+async function submitImages(
+  f: Awaited<ReturnType<typeof fixture>>,
+  options: {
+    userId?: string
+    customId?: string
+    files?: ReturnType<typeof f.attachment>[]
+  } = {},
+) {
+  const binding = await f.binding()
+  let flags: number | undefined
+  let response: TestPayload | undefined
+  const files = options.files ?? [f.attachment()]
+  await handleTowerUploadInteraction(
+    {
+      id: 'private-upload',
+      customId:
+        options.customId ??
+        `tower-upload-submit:${binding.id}:${f.message.author.id}`,
+      user: { id: options.userId ?? f.message.author.id },
+      client: f.client,
+      locale: 'zh-TW',
+      createdTimestamp: f.message.createdTimestamp,
+      isButton: () => false,
+      fields: {
+        getUploadedFiles: () =>
+          new Collection(files.map((image) => [image.id, image])),
+      },
+      deferReply: async (payload: { flags: number }) => {
+        flags = payload.flags
+      },
+      reply: async (payload: TestPayload & { flags?: number }) => {
+        response = payload
+        flags = payload.flags
+      },
+      editReply: async (payload: TestPayload) => {
+        response = payload
+      },
+    } as never,
+    f.imageClient,
+  )
+  assert.ok(response)
+  return { response, flags }
+}
+
+test('upload command opens a private file modal without posting or deferring a public message', async () => {
+  const f = await fixture()
+  let modal: ReturnType<typeof towerUploadModal> | undefined
+  await towerCommand.execute({
+    inCachedGuild: () => true,
+    guildId: 'guild',
+    channelId: f.message.channelId,
+    locale: 'zh-TW',
+    user: f.message.author,
+    client: f.client,
+    member: {},
+    guild: { channels: { fetch: async () => f.channel }, members: { me: {} } },
+    options: { getSubcommand: () => 'upload' },
+    showModal: async (value: typeof modal) => {
+      modal = value
+    },
+    deferReply: async () => {
+      throw new Error('Must show modal before deferring')
+    },
+  } as never)
+  assert.ok(modal)
+  const payload = modal.toJSON()
+  assert.equal(
+    payload.custom_id,
+    `tower-upload-submit:${(await f.binding()).id}:${f.message.author.id}`,
+  )
+  assert.ok(payload.custom_id.length <= 100)
+  assert.equal(payload.components[0].type, 18)
+  const label = payload.components[0] as {
+    component: { type: number; min_values?: number; max_values?: number }
+  }
+  assert.equal(label.component.type, 19)
+  assert.equal(label.component.min_values, 1)
+  assert.equal(label.component.max_values, 10)
+  assert.equal(f.publicMessages.length, 0)
+  assert.equal(f.privateMessages.length, 0)
+  assert.equal(f.calls(), 0)
+})
+
+test('private upload modals validate in every supported language', async () => {
+  const f = await fixture()
+  for (const language of ['zt', 'en', 'ja', 'ko'] as const) {
+    const modal = towerUploadModal(
+      await f.binding(),
+      '12345678901234567890',
+      language,
+    ).toJSON()
+    assert.ok(modal.custom_id.length <= 100)
+    assert.ok(modal.title.length <= 45)
+  }
+})
+
+test('modal images stay private until explicit publication and never post the original file', async () => {
+  const f = await fixture()
+  const { response, flags } = await submitImages(f)
+  assert.equal(flags, MessageFlags.Ephemeral)
+  assert.match(response.content, /私人草稿/)
+  assert.match(response.content, /27-19 \[PRIZE\] STONE/)
+  assert.equal(f.calls(), 1)
+  assert.equal(f.deleted(), 0)
+  assert.equal(f.publicMessages.length, 0)
+  assert.equal(f.privateMessages.length, 0)
+  assert.equal((await towerStore.list(await f.binding())).length, 0)
+  assert.equal(
+    (await f.draft()).observations[0].sourceMessageId,
+    'private-upload',
+  )
+  await f.click(publishId(response))
+  assert.equal(f.publicMessages.length, 1)
+  assert.match(f.publicMessages[0].content, /27-19 \[PRIZE\] STONE/)
+  assert.equal('files' in f.publicMessages[0], false)
+})
+
+test('more modal uploads merge privately and stale publish buttons refresh the preview', async () => {
+  const f = await fixture()
+  const first = await submitImages(f)
+  f.respond(recognized(7))
+  f.message.createdTimestamp += 60_000
+  const second = await submitImages(f)
+  assert.equal((await f.draft()).observations.length, 2)
+  const stale = await f.click(publishId(first.response))
+  assert.match(stale.content, /草稿已更新/)
+  assert.equal(f.publicMessages.length, 0)
+  await f.click(publishId(second.response))
+  assert.equal(f.publicMessages.length, 1)
+  assert.match(f.publicMessages[0].content, /27-7 \[PRIZE\] STONE/)
+  assert.match(f.publicMessages[0].content, /27-19 \[PRIZE\] STONE/)
+})
+
+test('the preview upload button opens another private modal, including from a DM preview', async () => {
+  const f = await fixture()
+  const { response } = await submitImages(f)
+  const row = response.components?.[1].toJSON() as {
+    components: Array<{ custom_id: string }>
+  }
+  let shown = false
+  await handleTowerUploadInteraction({
+    customId: row.components[2].custom_id,
+    locale: 'zh-TW',
+    user: f.message.author,
+    client: f.client,
+    isButton: () => true,
+    showModal: async () => {
+      shown = true
+    },
+  } as never)
+  assert.equal(shown, true)
+  assert.equal(f.publicMessages.length, 0)
+})
+
+test('rejects another uploader and permission loss before running recognition', async () => {
+  const f = await fixture()
+  const other = await submitImages(f, { userId: 'other-user' })
+  assert.equal(other.flags, MessageFlags.Ephemeral)
+  assert.match(other.response.content, /其他使用者/)
+  f.canPost(false)
+  const denied = await submitImages(f)
+  assert.match(denied.response.content, /沒有.*權限/)
+  assert.equal(f.calls(), 0)
+  assert.equal(f.publicMessages.length, 0)
+})
+
+test('rejects a modal opened before the tower channel was rebound', async () => {
+  const f = await fixture()
+  const customId = `tower-upload-submit:${(await f.binding()).id}:${f.message.author.id}`
+  await towerStore.bind('guild', f.message.channelId, 28, 'admin')
+  const result = await submitImages(f, { customId })
+  assert.match(result.response.content, /設定已變更/)
+  assert.equal(f.calls(), 0)
+  assert.equal(f.publicMessages.length, 0)
+})
+
+test('modal validation rejects unsupported files privately and keeps existing draft data', async () => {
+  const f = await fixture()
+  await submitImages(f)
+  const invalid = [
+    { ...f.attachment('file'), contentType: 'text/plain', name: 'notes.txt' },
+    { ...f.attachment('large'), size: 21 * 1024 * 1024 },
+    { ...f.attachment('url'), url: 'https://example.com/image.jpg' },
+  ]
+  const result = await submitImages(f, { files: invalid })
+  assert.equal(result.flags, MessageFlags.Ephemeral)
+  assert.match(result.response.content, /3 張.*PNG/)
+  assert.equal((await f.draft()).observations.length, 1)
+  assert.equal(f.calls(), 1)
+  assert.equal(f.publicMessages.length, 0)
+})
+
+test('empty uploads and uploads over the ten-image limit never call AI or publish', async () => {
+  const f = await fixture()
+  for (const files of [
+    [],
+    Array.from({ length: 11 }, (_, i) => f.attachment(`${i}`)),
+  ]) {
+    const result = await submitImages(f, { files })
+    assert.equal(result.flags, MessageFlags.Ephemeral)
+    assert.match(result.response.content, /1–10/)
+  }
+  assert.equal(f.calls(), 0)
+  assert.equal(f.publicMessages.length, 0)
+  assert.equal(
+    await towerDraftStore.getForUser(await f.binding(), f.message.author.id),
+    null,
+  )
+})
+
+test('an empty saved-draft view offers the private upload button without posting publicly', async () => {
+  const f = await fixture()
+  let response: TestPayload | undefined
+  await towerCommand.execute({
+    inCachedGuild: () => true,
+    guildId: 'guild',
+    channelId: f.message.channelId,
+    locale: 'zh-TW',
+    user: f.message.author,
+    client: f.client,
+    member: {},
+    guild: { channels: { fetch: async () => f.channel }, members: { me: {} } },
+    options: { getSubcommand: () => 'draft' },
+    deferReply: async () => {},
+    editReply: async (payload: TestPayload) => {
+      response = payload
+    },
+  } as never)
+  assert.match(response?.content ?? '', /私人上傳視窗/)
+  const row = response?.components?.[0].toJSON() as {
+    components: Array<{ custom_id: string }>
+  }
+  assert.equal(
+    row.components[0].custom_id,
+    `tower-upload:${(await f.binding()).id}`,
+  )
+  assert.equal(f.publicMessages.length, 0)
+})
 
 test('uploads produce private previews, keep public records unchanged, and delete the source', async () => {
   const f = await fixture()
@@ -900,6 +1145,7 @@ test('locale interaction caching remains active alongside private draft handlers
     createdTimestamp: 100,
     isButton: () => false,
     isStringSelectMenu: () => false,
+    isModalSubmit: () => false,
   }
   await Promise.all(
     (handlers.get('interactionCreate') ?? []).map((handler) =>

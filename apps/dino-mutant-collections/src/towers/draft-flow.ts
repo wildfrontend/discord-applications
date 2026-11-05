@@ -30,6 +30,7 @@ import {
   type TowerSummarySource,
   updateTowerSummary,
 } from './summary.js'
+import { towerUploadButton } from './upload-ui.js'
 
 function suggestedTarget(
   draft: TowerDraft,
@@ -141,7 +142,11 @@ export async function towerDraftPreview(
       .join('\n\n'),
     components: [
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu),
-      new ActionRowBuilder<ButtonBuilder>().addComponents(publish, cancel),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        publish,
+        cancel,
+        towerUploadButton(binding, language),
+      ),
     ],
   }
 }

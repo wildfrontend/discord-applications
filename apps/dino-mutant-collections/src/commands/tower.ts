@@ -10,6 +10,8 @@ import { towerDraftStore } from '../towers/drafts.js'
 import { type TowerTextKey, towerLanguage, towerText } from '../towers/i18n.js'
 import { renderTowerSummary } from '../towers/service.js'
 import { towerStore } from '../towers/store.js'
+import { showTowerUpload } from '../towers/upload-flow.js'
+import { towerUploadRow } from '../towers/upload-ui.js'
 
 export default defineCommand({
   data: new SlashCommandBuilder()
@@ -28,6 +30,21 @@ export default defineCommand({
       ko: '타워 이미지에서 점령 부족과 점령 가능 시각을 기록합니다',
     })
     .setDMPermission(false)
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('upload')
+        .setNameLocalizations({
+          'zh-TW': '上傳',
+          ja: 'アップロード',
+          ko: '업로드',
+        })
+        .setDescription('Open a private screenshot upload window')
+        .setDescriptionLocalizations({
+          'zh-TW': '開啟私人截圖上傳視窗，確認發布後才更新頻道',
+          ja: '非公開の画像アップロード画面を開く',
+          ko: '비공개 스크린샷 업로드 창을 엽니다',
+        }),
+    )
     .addSubcommand((subcommand) =>
       subcommand
         .setName('setup')
@@ -173,6 +190,13 @@ export default defineCommand({
       })
       return
     }
+    if (action === 'upload') {
+      await showTowerUpload(
+        interaction,
+        await towerStore.getBinding(interaction.guildId, channel.id),
+      )
+      return
+    }
     await interaction.deferReply({ flags: MessageFlags.Ephemeral })
     if (action === 'draft') {
       const binding = await towerStore.getBinding(
@@ -194,7 +218,10 @@ export default defineCommand({
               draft,
               language,
             )
-          : { content: text('noDraft'), components: [] },
+          : {
+              content: text(binding ? 'noDraft' : 'notConfigured'),
+              components: binding ? [towerUploadRow(binding, language)] : [],
+            },
       )
       return
     }
@@ -206,6 +233,10 @@ export default defineCommand({
         serverNumber,
         interaction.user.id,
       )
+      const binding = await towerStore.getBinding(
+        interaction.guildId,
+        channel.id,
+      )
       const warning =
         process.env.TOWER_TRACKING_ENABLED !== 'true'
           ? text('trackingDisabled')
@@ -216,14 +247,11 @@ export default defineCommand({
         content: [
           text('setup', { channel: channel.id, server: serverNumber }),
           warning,
-          me &&
-          channel.permissionsFor(me)?.has(PermissionFlagsBits.ManageMessages)
-            ? ''
-            : text('cleanupMissing'),
         ]
           .filter(Boolean)
           .join('\n'),
         allowedMentions: { parse: [] },
+        components: binding ? [towerUploadRow(binding, language)] : [],
       })
       return
     }
@@ -249,6 +277,7 @@ export default defineCommand({
           )
         : text('notConfigured'),
       allowedMentions: { parse: [] },
+      components: binding ? [towerUploadRow(binding, language)] : [],
     })
   },
 })

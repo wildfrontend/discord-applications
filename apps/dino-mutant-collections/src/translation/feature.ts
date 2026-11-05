@@ -107,8 +107,6 @@ export function startTranslationFeature(
   client: Client,
   { automatic }: TranslationFeatureOptions,
 ): void {
-  let lastAutomaticErrorAt = 0
-
   if (!process.env.AI_API_KEY?.trim()) {
     console.warn(
       '[translate] AI_API_KEY is missing; translation requests will fail until it is configured and the bot is restarted.',
@@ -126,19 +124,17 @@ export function startTranslationFeature(
         return
       }
 
-      // Tower uploads are staged privately; never forward their images or
-      // captions into public translation channels before publication.
-      if (
-        process.env.TOWER_TRACKING_ENABLED === 'true' &&
-        (await towerStore.getBinding(message.guildId, message.channelId))
-      )
-        return
-
-      const groupMember = await translationGroupStore.getMember(
-        message.channelId,
-      )
-
       try {
+        // Keep private tower uploads excluded even when a lookup fails.
+        if (
+          process.env.TOWER_TRACKING_ENABLED === 'true' &&
+          (await towerStore.getBinding(message.guildId, message.channelId))
+        )
+          return
+
+        const groupMember = await translationGroupStore.getMember(
+          message.channelId,
+        )
         if (groupMember) {
           const members = await translationGroupStore.list(
             groupMember.categoryId,
@@ -176,11 +172,13 @@ export function startTranslationFeature(
               )
             }),
           )
-          const failed = results.find(
-            (result): result is PromiseRejectedResult =>
-              result.status === 'rejected',
-          )
-          if (failed) throw failed.reason
+          for (const [index, result] of results.entries()) {
+            if (result.status === 'rejected') {
+              console.error(
+                `[translate] Delivery failed message=${message.id} source=${message.channelId} target=${targets[index].channelId}: ${safeErrorMessage(result.reason)}`,
+              )
+            }
+          }
           return
         }
 
@@ -193,13 +191,9 @@ export function startTranslationFeature(
           sourceIsA ? link.languageB : link.languageA,
         )
       } catch (error) {
-        const now = Date.now()
-        if (now - lastAutomaticErrorAt >= 60_000) {
-          lastAutomaticErrorAt = now
-          console.error(
-            `[translate] Automatic translation failed in channel ${message.channelId}: ${safeErrorMessage(error)}`,
-          )
-        }
+        console.error(
+          `[translate] Automatic translation failed message=${message.id} source=${message.channelId}: ${safeErrorMessage(error)}`,
+        )
       }
     })
   }

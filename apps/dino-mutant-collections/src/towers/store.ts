@@ -106,6 +106,22 @@ await database.execute(
 )
 
 export const towerStore = {
+  async getBindingById(id: string): Promise<TowerBinding | null> {
+    const result = await database.execute({
+      sql: 'SELECT * FROM tower_channels WHERE binding_id = ?',
+      args: [id],
+    })
+    const row = result.rows[0]
+    return row
+      ? {
+          id: String(row.binding_id),
+          guildId: String(row.guild_id),
+          channelId: String(row.channel_id),
+          serverNumber: Number(row.server_number),
+          adoptExistingSummary: Number(row.adopt_existing_summary) === 1,
+        }
+      : null
+  },
   async getReportingPeriodById(
     binding: TowerBinding,
     id: string,
